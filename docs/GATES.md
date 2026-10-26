@@ -130,6 +130,29 @@ exactly from what they returned. Each AC watched failing under a sabotage.
 
 DESIGN §2, §3 (without drive and filter), §5 (`oneshot`, `gated`, `loop`).
 
+**DONE 2026-10-26.** `Tests/voice_tests` 23/23, `Tests/interp_tests`. C2.1:
+period 109.0909 vs 54.5456 samples, ratio 1.999997. C2.2: 1000.00002 Hz,
++0.00003 cent (44.1 kHz sample, 48 kHz render). C2.3: oneshot level after
+note-off / before = 1.000; gated mid-release RMS ratio 0.5008, silent from
+note-off + release; loop period 2000.000 samples for a 2000-frame loop
+(1000.000 an octave up). C2.4: centre −3.0103 dB per side, hard left: right
+exactly 0. C2.5: byte-identical after reset, across instances and across
+block sizes 256/37. R3: 0 allocations in 288 000 frames with stealing. Each
+AC watched failing under a sabotage.
+
+**Interpolator (measured choice): windowed sinc**, 16 taps, Kaiser β 7,
+cutoff 0.45·fs, 512 phases. Error of a 44.1 kHz sine played at 48 kHz (SNR,
+fit over residual): Hermite 89.5 / 46.5 / 26.4 / 13.8 / 7.6 dB at 1 / 5 / 10
+/ 15 / 18 kHz, sinc 79.0 / 86.0 / 80.7 / 83.5 / 78.2 dB. Cost, ns per output
+frame, one layer: Hermite 15.0–17.4, sinc 29.2–35.9. The sinc costs about
+twice as much and is 54 dB cleaner at 10 kHz.
+
+**C2.6, the CPU budget per voice** (DESIGN §13), Release, Intel Xeon E5-1650
+v3 at 3.5 GHz: **one layer ≤ 40 ns per output frame** (measured 29.2 mono at
+the root key, 35.6 stereo pitched, so 0.17 % of a core at 48 kHz), **four
+layers ≤ 140 ns** (measured 129.4). Drive and filter (C5) come on top and get
+their own share there.
+
 * **C2.1** A sine sample at root key 60, played on 72, measures 2.000 ± 0.001 ×
   the frequency on 60 (autocorrelation).
 * **C2.2** A 44.1 kHz sample in a 48 kHz render plays at its recorded pitch
