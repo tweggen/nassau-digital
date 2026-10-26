@@ -16,7 +16,8 @@ instrument, where any asset you can edit can be a sample source, kept up to
 date as you edit it. A plugin that plays exported programs in other DAWs
 follows later on the same core.
 
-**Status: design.** Nothing builds yet.
+**Status: the core is being built, gate by gate** (`docs/GATES.md`). Build and
+test it with `./ci/gates.sh`; it needs CMake and a C++17 compiler, nothing else.
 
 * [`docs/DESIGN.md`](docs/DESIGN.md) is the specification.
 * [`docs/REVIEW.md`](docs/REVIEW.md) is the independent review of its first

@@ -1,0 +1,26 @@
+name: CI
+
+# Every job calls ci/gates.sh and does nothing else of substance: a move off
+# GitHub should rewrite this file, not the gate. The core needs no SDK, no
+# submodules and no secrets, so every job always runs.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  gates:
+    name: Gates (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Gate
+        # Git Bash on Windows; CMake picks the platform's default generator
+        # (Visual Studio on Windows), which ci/gates.sh handles with --config.
+        shell: bash
+        run: ./ci/gates.sh
