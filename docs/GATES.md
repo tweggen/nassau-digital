@@ -167,6 +167,18 @@ their own share there.
 
 DESIGN §2, §2.2, §4.5.
 
+**DONE 2026-10-26.** `Tests/layers_tests` 20/20. C3.1: summed RMS across a
+10-step equal-power fade within −0.002 … 0.000 dB (velocities 50–80); velFade
+0 switches between 64 and 65 (other layer below −100 dB). C3.2: a gap velocity
+renders exact zeros. C3.3: 64 hits at three spacings play the 3 layers
+20/23/21, 21/18/25 and 21/21/22 times, never the same layer twice in a row in
+a page, byte-identical across runs. C3.4: page alone = page after its
+predecessor (cmp), with the predecessor ending on the layer the page starts
+with. C3.5: group 1 gone 240 samples (the 5 ms choke fade) after the choking
+note, group 2's amplitude unchanged (0.353504 before and after). C3.6: the
+(P+1)th note steals the oldest at P = 8, 16, 32, 64, 128, 256; 0 allocations
+in process(). Each AC watched failing under a sabotage.
+
 * **C3.1** Two layers overlapping by `velFade` crossfade with equal power: the
   summed RMS across the fade stays within ± 0.5 dB; `velFade = 0` switches.
 * **C3.2** A velocity in the zone but in no layer's window is silent below

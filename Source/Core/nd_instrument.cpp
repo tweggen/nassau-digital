@@ -15,6 +15,42 @@ constexpr double kPi = 3.14159265358979323846;
 constexpr int kSlots = kMaxPolyphony + Instrument::kFadeSlots;
 
 double dbToGain(double db) { return std::pow(10.0, db / 20.0); }
+
+// SplitMix64's finaliser: a well-mixed 64-bit hash, deterministic everywhere.
+uint64_t mix64(uint64_t x) {
+    x += 0x9E3779B97F4A7C15ull;
+    x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ull;
+    x = (x ^ (x >> 27)) * 0x94D049BB133111EBull;
+    return x ^ (x >> 31);
+}
+
+// The round-robin pick (DESIGN §2.2): a function of the note's timeline
+// position, its key and the zone (and the group), never of earlier notes.
+uint64_t rrHash(int64_t position, int key, uint32_t zoneId, int group) {
+    uint64_t h = mix64(static_cast<uint64_t>(position));
+    h = mix64(h ^ (static_cast<uint64_t>(static_cast<uint32_t>(key)) << 32) ^ zoneId);
+    return mix64(h ^ static_cast<uint64_t>(static_cast<uint32_t>(group)));
+}
+
+// Equal-power velocity crossfade (DESIGN §2): over velFade steps at each edge
+// of the layer's window that lies inside the zone's range, the level ramps as
+// sin(pi/2 * t), so two layers overlapping by that width sum to constant
+// power. An edge on the zone's own boundary has nothing to fade against and
+// does not fade. velFade 0 is a hard switch.
+double velocityGain(int vel, int lo, int hi, int fade, int zoneLo, int zoneHi) {
+    if (fade <= 0) return 1.0;
+    double g = 1.0;
+    const double f = static_cast<double>(fade);
+    if (lo > zoneLo) {
+        const double t = (vel - lo) / f;
+        if (t < 1.0) g *= std::sin(1.5707963267948966 * std::max(t, 0.0));
+    }
+    if (hi < zoneHi) {
+        const double t = (hi - vel) / f;
+        if (t < 1.0) g *= std::sin(1.5707963267948966 * std::max(t, 0.0));
+    }
+    return g;
+}
 double clampd(double v, double lo, double hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
 // ---- The compiled program: fixed-size, copied by a voice at note-on -------------
@@ -137,7 +173,7 @@ struct Voice {
     float panL = 1.0f, panR = 1.0f;
     double cutoffHz = 20000.0;  // what the drive/filter stage (C5) is handed
     bool fading = false;
-    float fadeGain = 1.0f, fadeStep = 0.0f;
+    int64_t fadeLeft = 0, fadeTotal = 1;  // fade gain = fadeLeft / fadeTotal, exactly 0 at the end
 };
 
 // The taps an interpolator reads around floor(pos): x[i0 - L] .. x[i0 + R].
@@ -290,7 +326,8 @@ struct Instrument::Impl {
     void startFade(Voice& v) {
         if (v.fading) return;
         v.fading = true;
-        v.fadeStep = static_cast<float>(1.0 / static_cast<double>(std::max<int64_t>(1, cutFadeSamples)));
+        v.fadeTotal = std::max<int64_t>(1, cutFadeSamples);
+        v.fadeLeft = v.fadeTotal;
     }
 
     // A free slot of the pool, stealing the oldest voice if there is none
@@ -338,23 +375,135 @@ struct Instrument::Impl {
         return victim;
     }
 
-    void noteOn(int key, int vel, int64_t /*position*/) {
-        if (!rt) return;
-        for (const ZoneRt& z : rt->zones) {
-            if (key < z.keyLo || key > z.keyHi || vel < z.velLo || vel > z.velHi) continue;
-            // The layers this velocity plays.
-            int picked[kMaxLayers];
-            int numPicked = 0;
-            for (int j = 0; j < z.numLayers; ++j) {
-                const LayerRt& l = z.layers[j];
-                if (vel >= l.velLo && vel <= l.velHi) picked[numPicked++] = j;
+    // ---- Round-robin memory: per key, the layer each (zone, group) chose last
+    // in this page. Fixed size, allocated at prepare.
+    struct RrEntry {
+        uint32_t zoneId = 0;
+        int group = 0;
+        uint32_t layerId = 0;
+    };
+    std::vector<RrEntry> rrMemory;  // 128 keys x kRrMemoryPerKey
+    std::vector<int> rrCount;       // entries used per key
+    std::vector<int> rrNextWrite;   // ring position per key once full
+
+    RrEntry* rrFind(int key, uint32_t zoneId, int group) {
+        RrEntry* base = &rrMemory[static_cast<size_t>(key * kRrMemoryPerKey)];
+        for (int i = 0; i < rrCount[static_cast<size_t>(key)]; ++i)
+            if (base[i].zoneId == zoneId && base[i].group == group) return &base[i];
+        return nullptr;
+    }
+
+    void rrRemember(int key, uint32_t zoneId, int group, uint32_t layerId) {
+        if (RrEntry* e = rrFind(key, zoneId, group)) {
+            e->layerId = layerId;
+            return;
+        }
+        RrEntry* base = &rrMemory[static_cast<size_t>(key * kRrMemoryPerKey)];
+        int& count = rrCount[static_cast<size_t>(key)];
+        int slot;
+        if (count < kRrMemoryPerKey) {
+            slot = count++;
+        } else {
+            int& w = rrNextWrite[static_cast<size_t>(key)];
+            slot = w;
+            w = (w + 1) % kRrMemoryPerKey;
+        }
+        base[slot] = RrEntry{zoneId, group, layerId};
+    }
+
+    void startPage() {
+        std::fill(rrCount.begin(), rrCount.end(), 0);
+        std::fill(rrNextWrite.begin(), rrNextWrite.end(), 0);
+    }
+
+    // The layers a note plays in zone z, with their velocity gains. Returns
+    // how many; 0 for a velocity gap (DESIGN §2: plays nothing).
+    int pickLayers(const ZoneRt& z, int key, int vel, int64_t position, int* picked, double* gains) {
+        int cand[kMaxLayers];
+        double candGain[kMaxLayers];
+        int n = 0;
+        for (int j = 0; j < z.numLayers; ++j) {
+            const LayerRt& l = z.layers[j];
+            if (vel < l.velLo || vel > l.velHi) continue;
+            const double g = velocityGain(vel, l.velLo, l.velHi, l.velFade, z.velLo, z.velHi);
+            if (g <= 0.0) continue;
+            cand[n] = j;
+            candGain[n] = g;
+            ++n;
+        }
+        // Round-robin (DESIGN §2.2): of the candidates sharing a group number
+        // (> 0), exactly one plays: picked by a hash of the note's position,
+        // key and zone, and moved on by one when it would repeat the layer the
+        // same key's previous note played in this page.
+        bool keep[kMaxLayers];
+        for (int i = 0; i < n; ++i) keep[i] = true;
+        for (int i = 0; i < n; ++i) {
+            const int group = z.layers[cand[i]].rrGroup;
+            if (group <= 0 || !keep[i]) continue;
+            bool seen = false;
+            for (int k = 0; k < i; ++k) seen = seen || (z.layers[cand[k]].rrGroup == group);
+            if (seen) continue;  // this group was decided at its first member
+            int members[kMaxLayers];
+            int m = 0;
+            for (int k = i; k < n; ++k)
+                if (z.layers[cand[k]].rrGroup == group) members[m++] = k;
+            int choice = static_cast<int>(rrHash(position, key, z.id, group) % static_cast<uint64_t>(m));
+            if (m > 1) {
+                if (const RrEntry* prev = rrFind(key, z.id, group)) {
+                    if (z.layers[cand[members[choice]]].id == prev->layerId) choice = (choice + 1) % m;
+                }
             }
-            if (numPicked == 0) continue;  // a velocity gap plays nothing (DESIGN §2)
-            startVoice(z, key, vel, picked, numPicked);
+            for (int k = 0; k < m; ++k) keep[members[k]] = (k == choice);
+            rrRemember(key, z.id, group, z.layers[cand[members[choice]]].id);
+        }
+        int out = 0;
+        for (int i = 0; i < n; ++i) {
+            if (!keep[i]) continue;
+            picked[out] = cand[i];
+            gains[out] = candGain[i];
+            ++out;
+        }
+        return out;
+    }
+
+    // Choke groups are by number only (DESIGN §2): a note in group g fades out
+    // the sounding voices of group g, and nothing else.
+    void choke(int group) {
+        for (int i = 0; i < numOrder; ++i) {
+            Voice& v = voices[static_cast<size_t>(order[static_cast<size_t>(i)])];
+            if (v.zone.choke == group) startFade(v);
         }
     }
 
-    void startVoice(const ZoneRt& z, int key, int vel, const int* picked, int numPicked) {
+    void noteOn(int key, int vel, int64_t position) {
+        if (!rt) return;
+        // Decide first which zones play, so a note never chokes voices it
+        // starts itself (two zones of one group on one key). At most 64
+        // overlapping zones sound for one note; more are ignored.
+        int zoneIdx[64];
+        int picked[64][kMaxLayers];
+        double gains[64][kMaxLayers];
+        int numPicked[64];
+        int numZones = 0;
+        for (size_t zi = 0; zi < rt->zones.size() && numZones < 64; ++zi) {
+            const ZoneRt& z = rt->zones[zi];
+            if (key < z.keyLo || key > z.keyHi || vel < z.velLo || vel > z.velHi) continue;
+            const int n = pickLayers(z, key, vel, position, picked[numZones], gains[numZones]);
+            if (n == 0) continue;
+            zoneIdx[numZones] = static_cast<int>(zi);
+            numPicked[numZones] = n;
+            ++numZones;
+        }
+        // Choke groups first, then stealing (DESIGN §4.5).
+        for (int i = 0; i < numZones; ++i) {
+            const int g = rt->zones[static_cast<size_t>(zoneIdx[i])].choke;
+            if (g > 0) choke(g);
+        }
+        for (int i = 0; i < numZones; ++i)
+            startVoice(rt->zones[static_cast<size_t>(zoneIdx[i])], key, vel, picked[i], gains[i], numPicked[i]);
+    }
+
+    void startVoice(const ZoneRt& z, int key, int vel, const int* picked, const double* velGains, int numPicked) {
         const int slot = allocate();
         if (slot < 0) return;
         Voice& v = voices[static_cast<size_t>(slot)];
@@ -387,7 +536,7 @@ struct Instrument::Impl {
             if (L.hi - L.lo < 1) continue;
             L.pos = L.reverse ? static_cast<double>(L.hi - 1) : static_cast<double>(L.lo);
             L.factor = std::exp2(lr.tune / 12.0) * s->sampleRate() / sampleRate;
-            const double g = voiceGain * dbToGain(lr.level);
+            const double g = voiceGain * dbToGain(lr.level) * velGains[n];
             const double pan = clampd(lr.pan, -1.0, 1.0);
             if (L.channels == 1) {
                 // A mono layer: constant-power pan (DESIGN §2), -3 dB per side at centre.
@@ -467,8 +616,8 @@ struct Instrument::Impl {
                 float g = static_cast<float>(v.amp.next());
                 v.filt.next();
                 if (v.fading) {
-                    g *= v.fadeGain;
-                    v.fadeGain = std::max(0.0f, v.fadeGain - v.fadeStep);
+                    g *= static_cast<float>(static_cast<double>(v.fadeLeft) / static_cast<double>(v.fadeTotal));
+                    if (v.fadeLeft > 0) --v.fadeLeft;
                 }
                 outL[done + s] += bl[s] * g * v.panL;
                 outR[done + s] += br[s] * g * v.panR;
@@ -480,7 +629,7 @@ struct Instrument::Impl {
             for (int j = 0; j < v.numLayers; ++j) anyLayer = anyLayer || v.layers[j].active;
             const bool ampDone = v.amp.idle() ||
                                  (v.amp.stage() == Envelope::Stage::Sustain && v.amp.value() <= 0.0);
-            if (!anyLayer || ampDone || (v.fading && v.fadeGain <= 0.0f)) return false;
+            if (!anyLayer || ampDone || (v.fading && v.fadeLeft == 0)) return false;
         }
         return true;
     }
@@ -496,6 +645,9 @@ void Instrument::prepare(double sampleRate) {
     if (!m.sinc.built()) m.sinc.build();
     m.voices.assign(static_cast<size_t>(kSlots), Voice{});
     m.order.assign(static_cast<size_t>(kSlots), 0);
+    m.rrMemory.assign(static_cast<size_t>(128 * kRrMemoryPerKey), Impl::RrEntry{});
+    m.rrCount.assign(128, 0);
+    m.rrNextWrite.assign(128, 0);
     reset();
 }
 
@@ -553,7 +705,10 @@ void Instrument::reset() {
     m.numOrder = 0;
     m.nextSeq = 1;
     m.modWheel = 0;
+    m.startPage();
 }
+
+void Instrument::startPage() { impl_->startPage(); }
 
 void Instrument::process(int64_t timelineFrame, const Event* events, int numEvents, float* outL, float* outR,
                          int n) {
