@@ -17,8 +17,7 @@ A **plugin player** (VST3/CLAP/AU on nassau-plugin-sdk) that plays exported
 programs from embedded audio follows later on the same core (§10). Programs
 leaving Smaragd is postponed, not dropped.
 
-This file is the specification. The schedule (`GATES.md`) follows once §13 is
-answered. Every decision below that came from the author's interview of
+This file is the specification; the schedule is [`GATES.md`](GATES.md). Every decision below that came from the author's interview of
 2026-10-26 is marked **(decided)**; everything else is a proposal. The first
 draft was reviewed independently; the review and what was done with each
 finding are in [`REVIEW.md`](REVIEW.md).
@@ -127,12 +126,13 @@ byte-identical.
 The layer is picked by a hash of the note's **position on the timeline** (in
 project frames), its key and the zone id, modulo the group's size, with the
 rule that it never repeats the layer of the same key's previous note when that
-note is in the same page. The same note at the same place always plays the
+note is in the same page. **Decided: try this first**; a strict cycle only if
+this does not satisfy in use. The same note at the same place always plays the
 same layer, live and rendered, and neighbouring hits differ. It is not a strict
 cycle (A B C A B C): a strict cycle needs the count of every earlier note of
 the zone, which a page does not have. If a strict cycle matters, the count can
 come from the track's MIDI ahead of the page (qbx's chase already reads back
-for controllers); that is a qbx change and a later gate. To be confirmed (§13).
+for controllers); that is a qbx change and a later gate.
 
 ## 3. Signal path
 
@@ -192,8 +192,10 @@ exists (proposal 37 §5.4): a **return track** whose content is a tap on
 return track in the model, its cache sizing and its UI, planned as proposal 37
 P9 and not built. Ducking and gating need one more thing: a plugin on another
 track that reads the return track as its **sidechain** input. The sampler is
-the first instrument to need both, so its qbx proposal (§9) carries them, as
-a qbx feature every multi-output plugin uses, not a sampler feature.
+the first instrument to need both. **They come first, as a qbx proposal of
+their own** **(decided)**, built before the sampler's multi-output gate: a qbx
+feature every multi-output plugin and every ducking compressor uses, not a
+sampler feature.
 
 ## 4. Voice parameters
 
@@ -211,8 +213,8 @@ Amount, curve, mix.
 
 ### 4.4 Modulation, fixed routes
 
-Not a matrix. **One LFO** to start with **(decided)**; the rest of the set is
-still undecided and starts as:
+Not a matrix. **One LFO**, and no routes beyond this fixed set are foreseen
+**(decided)**:
 
 * velocity → level, cutoff, sample start;
 * a filter envelope (ADSR) → cutoff;
@@ -223,8 +225,8 @@ still undecided and starts as:
 
 Polyphony **8, 16, 32, 64, 128 or 256 voices** **(decided)**, a fixed voice
 pool allocated when the instrument is prepared, so changing it is a state
-change, not something that happens on the audio path. The default proposed is
-32. Choke groups are applied first, then the oldest voice is stolen. Also:
+change, not something that happens on the audio path. The default is 32
+**(decided)**. Choke groups are applied first, then the oldest voice is stolen. Also:
 output level, master tune, kit-bus drive per output (§3.1).
 
 ## 5. Play modes and loops
@@ -411,7 +413,7 @@ edit. So:
   headless runner. The command field takes the XML itself, with no shorthand
   **(decided)**; it is an editor pane with completion of verbs and attributes,
   not a one-line field.
-* **Addressing**, proposed: a verb names the instrument the way the plugin
+* **Addressing** **(decided)**: a verb names the instrument the way the plugin
   verbs already do, by `trackPath` and `slot` (as `set-plugin-param`), and a
   zone or layer by its stable id:
 
@@ -525,18 +527,16 @@ open is collected under **Still open** below.
 9. → §4.5. **Polyphony**: a default (32?) and a maximum.
    Timo: 8 to 256 in 2 by the power of n steps.
 
-**Still open:**
+**Settled on 2026-10-26**, the questions this list left open:
 
-* **Return tracks and sidechain inputs** (the second half of 3): their own qbx
-  proposal, built before the sampler, or part of the sampler's? Proposed: their
-  own, because every multi-output plugin and every ducking compressor needs
-  them, not only this instrument.
-* **Round-robin choice** (§2.2): is a layer chosen by the note's position,
-  stateless and the same live and rendered, good enough, or must it be a strict
-  cycle, which needs a qbx change?
-* **Addressing** (§9.3): the proposal is `trackPath` + `slot` + stable zone id.
-* **Polyphony default**: proposed 32.
-* **Modulation routes** beyond the one LFO (§4.4).
+* **Return tracks and sidechain inputs come first**, as a qbx proposal of their
+  own, built before the sampler's multi-output gate (§3.1).
+* **Round-robin by position** (§2.2): tried first; a strict cycle only if it
+  does not satisfy in use.
+* **Addressing** by `trackPath` + `slot` + stable zone id (§9.3), agreed.
+* **Polyphony** defaults to 32 voices (§4.5), agreed.
+* **Modulation** (§4.4): one LFO and no further routes foreseen; the fixed set
+  listed there is the whole of it.
 
 To measure in the gates: the interpolator, the oversampling factor, and the
 CPU budget per voice, which should be named first.

@@ -16,6 +16,10 @@ instrument, where any asset you can edit can be a sample source, kept up to
 date as you edit it. A plugin that plays exported programs in other DAWs
 follows later on the same core.
 
-**Status: design.** Nothing builds yet. The specification is being written in
-[`docs/DESIGN.md`](docs/DESIGN.md); a gated schedule (`docs/GATES.md`) follows
-once the design is agreed.
+**Status: design.** Nothing builds yet.
+
+* [`docs/DESIGN.md`](docs/DESIGN.md) is the specification.
+* [`docs/REVIEW.md`](docs/REVIEW.md) is the independent review of its first
+  draft and what was done with each finding.
+* [`docs/GATES.md`](docs/GATES.md) is the schedule: gates with measured
+  acceptance criteria, for this repository and for qbx.
