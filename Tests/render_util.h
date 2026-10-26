@@ -28,13 +28,11 @@ struct Stereo {
 
 /// Renders `frames` frames starting at timeline frame `start`, in blocks of
 /// `block`, feeding each note in the block it falls in. Notes must be sorted.
-inline Stereo render(nd::Instrument& inst, const std::vector<Note>& notes, int64_t frames, int block = 256,
-                     int64_t start = 0) {
-    Stereo out;
-    out.l.assign(static_cast<size_t>(frames), 0.0f);
-    out.r.assign(static_cast<size_t>(frames), 0.0f);
-    std::vector<nd::Event> ev;
-    ev.reserve(notes.size());
+/// Renders into `out` (resized by the caller to at least `frames`) using
+/// `ev` (reserved by the caller for notes.size()): allocates nothing, so an
+/// allocation counter around it sees process() alone.
+inline void renderInto(nd::Instrument& inst, const std::vector<Note>& notes, int64_t frames, Stereo& out,
+                       std::vector<nd::Event>& ev, int block = 256, int64_t start = 0) {
     size_t next = 0;
     while (next < notes.size() && notes[next].frame < start) ++next;
     for (int64_t b = 0; b < frames; b += block) {
@@ -51,6 +49,16 @@ inline Stereo render(nd::Instrument& inst, const std::vector<Note>& notes, int64
         }
         inst.process(start + b, ev.data(), static_cast<int>(ev.size()), out.l.data() + b, out.r.data() + b, n);
     }
+}
+
+inline Stereo render(nd::Instrument& inst, const std::vector<Note>& notes, int64_t frames, int block = 256,
+                     int64_t start = 0) {
+    Stereo out;
+    out.l.assign(static_cast<size_t>(frames), 0.0f);
+    out.r.assign(static_cast<size_t>(frames), 0.0f);
+    std::vector<nd::Event> ev;
+    ev.reserve(notes.size());
+    renderInto(inst, notes, frames, out, ev, block, start);
     return out;
 }
 
