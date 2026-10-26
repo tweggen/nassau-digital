@@ -253,6 +253,20 @@ DESIGN §3.1.
 
 DESIGN §5 (`tempo-loop`, `tempo-oneshot`, method `resample`).
 
+**DONE 2026-10-26.** `Tests/tempo_tests` 22/22. C7.1: a 2-beat 1 s loop
+(1 kHz carrier under a once-per-loop swell) at 100 BPM measures a period of
+1200.000 ms and a pitch of −3.156413 st (error −0.00001 cent; 44.1 kHz source:
+1200.000 ms, +0.000004 cent); at 120 BPM 1000.000 ms and 1000.000 Hz;
+`tempo-oneshot` at 100 BPM sounds for 1200.000 ms through a note-off, at
+−0.00005 cent; `stretch` and `beats="0"` keep the sample's own rate. C7.2: a
+change mid-loop at frame 30208, largest step within 10 ms of it against the
+loop's own largest at either tempo: 100→140 BPM 0.0113 vs 0.0540, 140→100
+0.0301 vs 0.0540, 90→160 0.0127 vs 0.0614, the new pitch within 0.0000 cent.
+Byte-identical across reset and block sizes 256/37 with tempo changes; 0
+allocations in 248 000 frames with 100 tempo changes. Watched failing: the
+ratio inverted (period 1150 ms at the lag search's edge, +631 cent), and a
+read position rescaled at the change (steps 0.163 / 0.163 / 0.192).
+
 * **C7.1** A 2-beat loop at 120 BPM played at 100 BPM measures a period of
   2·60/100 s ± 1 ms, and its pitch falls by 12·log2(120/100) semitones
   ± 1 cent.
