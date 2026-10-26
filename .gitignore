@@ -1,0 +1,4 @@
+# Build trees: ci/build.sh writes build/, ci/gates.sh writes build-ci/.
+/build/
+/build-ci/
+/build-*/

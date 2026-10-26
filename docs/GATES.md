@@ -28,8 +28,9 @@ in nassau-bloom `docs/GATES.md`) apply unchanged. In short:
 
 * **R1 — No gate regresses an earlier one.** The exit command is the full
   suite: `./ci/gates.sh` here, and qbx's `./ci/gates.sh` for a Q gate.
-* **R2 — The core stays framework-free**: standard headers only, no Qt, no
-  IPlug2, no SDK; allocation at prepare time only.
+* **R2 — The core stays framework-free**: standard headers and the
+  header-only `nassau-dsp` submodule only; no Qt, no IPlug2, no SDK;
+  allocation at prepare time only.
 * **R3 — No allocation, no locks, no I/O in `process()`.** A sample buffer is
   released on a worker, never on the audio thread (DESIGN §6).
 * **R4 — Append-only parameters and program attributes**; unknown attributes
@@ -60,7 +61,8 @@ from there, through the locator and the single nassau-suite pin of DESIGN §9.2
 
 * **X1.1** nassau-analogue's own suite passes unchanged, and its golden renders
   are byte-identical before and after the move.
-* **X1.2** The shared library builds and tests with no Qt, no IPlug2 and no SDK.
+* **X1.2** nassau-dsp builds and runs its own tests with no Qt, no IPlug2 and
+  no SDK, and its headers include nothing outside R2's list.
 
 Needed by C5.
 
@@ -82,6 +84,12 @@ the two this schedule depends on:
 ## Track C — the core
 
 ### C0 — Scaffold
+
+**DONE 2026-10-26.** `./ci/gates.sh` green on ubuntu, macOS and Windows CI
+(run 40289766611: 8/8 ctest on each, jobs 8 s / 14 s / 29 s). The R2 header
+check (`cmake/CheckCoreHeaders.cmake`) runs as a build step and as ctest
+cases on five violation fixtures; watched failing: `#include <QString>` in
+`Source/Core/nd_version.cpp` stopped the build.
 
 CMake library and test harness on the house pattern, `ci/` with the four verbs
 (`build`, `clean`, `install`, `uninstall`; install is a no-op for a library)
