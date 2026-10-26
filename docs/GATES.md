@@ -85,6 +85,12 @@ the two this schedule depends on:
 
 ### C0 — Scaffold
 
+**DONE 2026-10-26.** `./ci/gates.sh` green on ubuntu, macOS and Windows CI
+(run 40289766611: 8/8 ctest on each, jobs 8 s / 14 s / 29 s). The R2 header
+check (`cmake/CheckCoreHeaders.cmake`) runs as a build step and as ctest
+cases on five violation fixtures; watched failing: `#include <QString>` in
+`Source/Core/nd_version.cpp` stopped the build.
+
 CMake library and test harness on the house pattern, `ci/` with the four verbs
 (`build`, `clean`, `install`, `uninstall`; install is a no-op for a library)
 and `ci/gates.sh`.
