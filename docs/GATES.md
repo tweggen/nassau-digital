@@ -203,6 +203,18 @@ in process(). Each AC watched failing under a sabotage.
 
 DESIGN §4.1, §4.4.
 
+**DONE 2026-10-26.** `Tests/mod_tests` 26/26. C4.1: amp envelope on DC
+measures attack 50.000, hold 30.000, decay 100.000, release 200.000 ms (set
+50/30/100/200; also 200.000 ms from mid-attack); filter envelope 40.000 /
+120.000 / 150.000 ms (set 40/120/150), measured at the drive → filter slot
+through the public modulation tap, since the filter is C5's. C4.2: LFO 2 Hz →
+pitch measures 2.000013 Hz (±57.8 Hz around 1 kHz); mod wheel 0 / 64 / 127 →
+depth 0.00 / 29.11 / 57.79 Hz; LFO → pan 2.000000 Hz; velocity 64/127 → level
+×0.5039; velocity 1/64/127 → start frame 12600/6300/0 (later when softer);
+velocity → cutoff 1011/2011/4000 Hz with +24 st (at the slot, until C5).
+Voice cost unchanged against C2.6 (35.8 ns stereo one layer, 130.1 ns four
+layers). Each AC watched failing under a sabotage.
+
 * **C4.1** Amp ADSR + hold and the filter envelope each match their segment
   times ± 1 ms (measured on the envelope applied to DC).
 * **C4.2** The LFO at 2 Hz → pitch measures 2.00 ± 0.01 Hz of modulation;

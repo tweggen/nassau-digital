@@ -15,6 +15,7 @@ add_library(nassau_digital_core STATIC
     nd_sample.h
     nd_interp.h
     nd_envelope.h
+    nd_voice_fx.h
     nd_instrument.h
     nd_instrument.cpp
 )

@@ -29,8 +29,21 @@
 //   layers (read, pitch, level, layer pan) -> sum -> [drive -> filter] -> amp -> pan -> out
 //
 // The bracketed stage is gate C5's (it waits for nassau-dsp). The voice
-// renders into a stereo block buffer and hands it to that stage before the
-// amp; today the stage passes the block through unchanged.
+// renders into a stereo block buffer and hands it to that stage (VoiceFx,
+// nd_voice_fx.h) before the amp, with the block's modulated cutoff; today the
+// stage passes the block through unchanged.
+//
+// Modulation (DESIGN §4.4), the fixed routes, each documented with its
+// direction (v = velocity / 127, w = mod wheel / 127, depth = 1 - m + m*w
+// with m = modWheelToLfoDepth, lfo = a sine at lfoRate from phase 0 at
+// note-on):
+//   level    x (1 - velToLevel * (1 - v))                 louder with velocity
+//   start    + velToStart * (1 - v) frames                later at low velocity
+//   pitch    + lfoToPitch * lfo * depth semitones
+//   pan      + lfoToPan * lfo * depth
+//   cutoff   x 2^((velToCutoff * v + filterEnvAmount * filterEnv
+//                 + lfoToCutoff * lfo * depth + modWheelToCutoff * w
+//                 + filterKeyTrack * (key - rootKey)) / 12), clamped to 20..20000 Hz
 
 #include <cstdint>
 #include <memory>
@@ -40,6 +53,25 @@
 #include "nd_sample.h"
 
 namespace nd {
+
+/// What one voice's modulation came to at the start of one control block
+/// (see Instrument::setModulationTap).
+struct ModulationFrame {
+    uint32_t zoneId = 0;
+    int key = 0;
+    int64_t age = 0;          ///< samples since the voice's note-on
+    double ampEnv = 0.0;      ///< 0..1
+    double filterEnv = 0.0;   ///< 0..1
+    double lfo = 0.0;         ///< -1..1, before depth
+    double lfoDepth = 1.0;    ///< the mod wheel's scaling of the LFO routes, 0..1
+    double pitch = 0.0;       ///< semitones from the sample's recorded pitch, all routes applied
+    double pan = 0.0;         ///< the zone pan stage's position, -1..1
+    double cutoffHz = 0.0;    ///< what the drive -> filter stage is handed
+};
+
+/// Called from process() once per sounding voice per control block. It runs
+/// on the audio thread: it must not allocate, lock or block.
+using ModulationTap = void (*)(void* user, const ModulationFrame& frame);
 
 struct Event {
     enum Type : uint8_t { NoteOn = 0, NoteOff = 1, ModWheel = 2 };
@@ -100,6 +132,12 @@ public:
 
     /// Voices sounding (including ones fading out after a steal).
     int activeVoices() const;
+
+    /// Installs (or with nullptr removes) a tap that sees each voice's
+    /// modulation once per control block: for an editor's modulation display,
+    /// and for measuring routes whose target cannot be heard yet (the filter's
+    /// cutoff until gate C5). Host thread.
+    void setModulationTap(ModulationTap tap, void* user);
 
 private:
     struct Impl;
