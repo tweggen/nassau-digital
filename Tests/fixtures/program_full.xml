@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- C1.1/C1.2 fixture: every element and every attribute of the program
+     format, each at a value other than its default, plus unknown attributes
+     and elements at every level. program_tests.cpp checks the coverage. -->
+<NassauDigitalProgram version="1" name="Kit &amp; &quot;Friends&quot; &#x2013; 1" polyphony="64"
+    busDrive="0.2" outputLevel="-3.5" masterTune="0.1234567890123456" nextId="13"
+    futureProgramAttr="kept &lt;verbatim&gt;">
+  <zone id="1" keyLo="36" keyHi="36" velLo="1" velHi="126" rootKey="36" keyTrack="0"
+        mode="oneshot" tempoMethod="resample" drive="0.4" driveCurve="tube" driveMix="0.75"
+        filter="lp12" cutoff="8000" resonance="0.3" filterKeyTrack="0.5" filterEnvAmount="12"
+        attack="0.01" hold="0.02" decay="0.3" sustain="0.6" release="0.4"
+        filterAttack="0.005" filterDecay="0.25" filterSustain="0.2" filterRelease="0.3"
+        lfoRate="5.500000000000001" lfoToPitch="0.5" lfoToCutoff="-7" lfoToPan="0.25"
+        velToLevel="0.8" velToCutoff="24" velToStart="441" modWheelToLfoDepth="0.9"
+        modWheelToCutoff="-12" pan="-0.3" level="-6" tune="2" choke="1" output="aux1" pad="3"
+        futureZoneAttr="z">
+    <layer id="2" src="audio/kick.wav" start="10" end="44100" loopStart="100" loopEnd="40000"
+           beats="2" velLo="0" velHi="100" velFade="8" rrGroup="1" tune="-0.5" level="-1.5"
+           pan="0.5" reverse="1" futureLayerAttr="l"/>
+    <layer id="3" src="audio/kick-2.wav" velLo="90" velHi="127" velFade="8" rrGroup="1">
+      <futureLayerChild a="1">layer text</futureLayerChild>
+    </layer>
+    <futureZoneChild/>
+  </zone>
+  <zone id="5" keyLo="38" keyHi="40" mode="tempo-loop" driveCurve="fold" filter="hp24" output="aux8">
+    <layer id="6" src="audio/snare.wav"/>
+    <layer id="7" src="audio/snare-2.wav"/>
+    <layer id="8" src="audio/snare-3.wav"/>
+    <layer id="9" src="audio/snare-4.wav"/>
+  </zone>
+  <zone id="10" mode="tempo-oneshot" driveCurve="hard" filter="hp12" output="aux4">
+    <layer id="11" src="a b &amp; c.wav"/>
+  </zone>
+  <zone id="4" mode="loop" filter="lp24"/>
+  <zone id="12" mode="gated"/>
+  <futureProgramChild kind="x">
+    <nested deep="yes">text &amp; more<![CDATA[<raw>]]></nested>
+  </futureProgramChild>
+</NassauDigitalProgram>

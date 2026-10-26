@@ -100,6 +100,17 @@ and `ci/gates.sh`.
 
 DESIGN §2, §2.1, §12.
 
+**DONE 2026-10-26.** `Tests/program_tests` 66/66. C1.1: the fixture
+(`Tests/fixtures/program_full.xml`) sets all 40 zone, 14 layer and 5 program
+attributes off their defaults (checked by the test, plus every enum value but
+the outputs), and parse → write → parse is equal and write is byte-stable.
+C1.2: unknown attributes and elements survive at program, zone and layer
+level, also through an edit. C1.3: after deleting the highest-id zone the new
+id equals the old `nextId` (5; 13 through the fixture and a save). C1.4:
+tune +2 on ALL gives −95/0/95.5 → −93/2/96 (clamped); relative edits on 6
+enum/bool parameters refused, all-or-nothing. C1.5: 7/7 kinds of edit restored
+exactly from what they returned. Each AC watched failing under a sabotage.
+
 * **C1.1** Parse → write → parse yields the identical structure, for a
   fixture covering every element and attribute.
 * **C1.2** Unknown attributes and elements survive the round trip.

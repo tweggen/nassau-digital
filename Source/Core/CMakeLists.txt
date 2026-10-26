@@ -4,6 +4,14 @@
 add_library(nassau_digital_core STATIC
     nd_version.h
     nd_version.cpp
+    nd_xml.h
+    nd_xml.cpp
+    nd_program.h
+    nd_program.cpp
+    nd_program_xml.h
+    nd_program_xml.cpp
+    nd_edit.h
+    nd_edit.cpp
 )
 target_include_directories(nassau_digital_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_options(nassau_digital_core PRIVATE ${ND_WARNING_FLAGS})
