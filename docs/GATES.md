@@ -54,7 +54,9 @@ in nassau-bloom `docs/GATES.md`) apply unchanged. In short:
 
 The 24 dB ladder, the 12 dB SVF, the HP cascade and `shapeTriodeK`, with
 `synth_dsp.h`, `nassau_real` and the 32-sample control block, move into a
-shared library (DESIGN §11); nassau-analogue then consumes them from there.
+shared library, `nassau-dsp` (DESIGN §11); nassau-analogue then consumes them
+from there, through the locator and the single nassau-suite pin of DESIGN §9.2
+(never a nested submodule).
 
 * **X1.1** nassau-analogue's own suite passes unchanged, and its golden renders
   are byte-identical before and after the move.
