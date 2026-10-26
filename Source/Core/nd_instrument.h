@@ -58,6 +58,8 @@ public:
     static constexpr int kFadeSlots = 32;
     /// The fade of a stolen or choked voice, in seconds.
     static constexpr double kCutFadeSeconds = 0.005;
+    /// Previous round-robin choices remembered per key within a page.
+    static constexpr int kRrMemoryPerKey = 16;
 
     Instrument();
     ~Instrument();
@@ -81,8 +83,16 @@ public:
     /// Frees replaced buffers no voice holds any more; returns how many. Host thread.
     int collectGarbage();
 
-    /// Silences every voice at once and forgets the mod wheel.
+    /// Silences every voice at once, forgets the mod wheel and starts a page.
     void reset();
+
+    /// Starts a render page (DESIGN §2.2). Round-robin never gives a key the
+    /// layer of that key's previous note when that note is in the same page;
+    /// this forgets the previous notes, so a page's choices depend on the page
+    /// alone and a page rendered on its own equals the same page rendered
+    /// after its predecessor. The host calls it before the first block of a
+    /// page; voices keep sounding.
+    void startPage();
 
     /// Renders n frames (overwriting outL/outR). `timelineFrame` is the
     /// project position of the block's first frame. Audio thread.
