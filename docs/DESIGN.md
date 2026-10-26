@@ -460,7 +460,7 @@ qbx (§11).
 
 | What | Today | Moves to |
 |---|---|---|
-| 24 dB ladder, 12 dB SVF (low-pass), HP cascade, `shapeTriodeK`, with `synth_dsp.h`, `nassau_real` and the 32-sample control block | nassau-analogue `Source/DSP` | a shared DSP library used by both (nassau-plugin-sdk, or a header-only `nassau-dsp`) |
+| 24 dB ladder, 12 dB SVF (low-pass), HP cascade, `shapeTriodeK`, with `synth_dsp.h`, `nassau_real` and the 32-sample control block | nassau-analogue `Source/DSP` | **`nassau-dsp`** **(decided)**, a new header-only, dependency-free repository that nassau-analogue and this core take as a submodule. Not nassau-plugin-sdk: the core must not need the SDK, and qbx takes the core as a submodule, so qbx would otherwise pull iPlug2 and the VST3 SDK for a few headers |
 | phase vocoder | qbx `tw303a/sources` | stays in qbx for the native instrument; extracted only when the plugin player needs tempo modes |
 | program format reader and writer | new | this repo's core (no Qt) |
 

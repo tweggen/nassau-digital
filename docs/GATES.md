@@ -28,8 +28,9 @@ in nassau-bloom `docs/GATES.md`) apply unchanged. In short:
 
 * **R1 — No gate regresses an earlier one.** The exit command is the full
   suite: `./ci/gates.sh` here, and qbx's `./ci/gates.sh` for a Q gate.
-* **R2 — The core stays framework-free**: standard headers only, no Qt, no
-  IPlug2, no SDK; allocation at prepare time only.
+* **R2 — The core stays framework-free**: standard headers and the
+  header-only `nassau-dsp` submodule only; no Qt, no IPlug2, no SDK;
+  allocation at prepare time only.
 * **R3 — No allocation, no locks, no I/O in `process()`.** A sample buffer is
   released on a worker, never on the audio thread (DESIGN §6).
 * **R4 — Append-only parameters and program attributes**; unknown attributes
@@ -54,11 +55,14 @@ in nassau-bloom `docs/GATES.md`) apply unchanged. In short:
 
 The 24 dB ladder, the 12 dB SVF, the HP cascade and `shapeTriodeK`, with
 `synth_dsp.h`, `nassau_real` and the 32-sample control block, move into a
-shared library (DESIGN §11); nassau-analogue then consumes them from there.
+new repository **`nassau-dsp`** (DESIGN §11, decided): header-only, standard
+headers only. nassau-analogue then takes it as a submodule and consumes them
+from there; so does this core, from C5 on.
 
 * **X1.1** nassau-analogue's own suite passes unchanged, and its golden renders
   are byte-identical before and after the move.
-* **X1.2** The shared library builds and tests with no Qt, no IPlug2 and no SDK.
+* **X1.2** nassau-dsp builds and runs its own tests with no Qt, no IPlug2 and
+  no SDK, and its headers include nothing outside R2's list.
 
 Needed by C5.
 
