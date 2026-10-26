@@ -388,11 +388,23 @@ edit. So:
 
 ### 9.2 Where the code lives
 
-* The core is a **git submodule** of qbx, built by a new engine module
-  **`tw/sampler`** (depending on core and events), which owns the `twPlugin`
-  subclass and is registered like the built-in 303 (`twNativeInstrument`). qbx
-  has no sibling-repo dependency yet; this is the first, and it is a submodule
-  because the engine must build from one checkout.
+* The core is built inside qbx by a new engine module **`tw/sampler`**
+  (depending on core and events), which owns the `twPlugin` subclass and is
+  registered like the built-in 303 (`twNativeInstrument`). qbx has no
+  sibling-repo dependency yet; this is the first.
+* **One pin per repository** **(decided 2026-10-26, replacing "the core is a
+  git submodule of qbx")**. The core is **not** a submodule of qbx, and
+  nassau-dsp is not a submodule of this repo or of nassau-analogue. A Nassau
+  repo that other Nassau repos consume is pinned **once**, as a top-level
+  submodule of nassau-suite, the way nassau-plugin-sdk already is: the suite
+  passes its path to every consumer (`-DNASSAU_DIGITAL_DIR`,
+  `-DNASSAU_DSP_DIR`), and a consumer finds it through a locator copied
+  verbatim from the providing repo's `cmake/bootstrap/`, in one order:
+  explicit directory, sibling checkout (`../nassau-digital`, `../nassau-dsp`),
+  then a fetch of a pinned commit. A nested pin would be a second answer to
+  "which core shipped?", and nassau-suite's release script, which reads only
+  its own `.gitmodules`, would not tag it. Sibling checkouts are also what an
+  IDE opened on the workspace works with.
 * The app side is a new slice **`objects/sampler`**, at the rank of
   `objects/midi`. Its model objects **wrap the core's program**: there is one
   model, Qt-free inside, with undo, links and signals outside. A layer's asset
@@ -460,7 +472,7 @@ qbx (§11).
 
 | What | Today | Moves to |
 |---|---|---|
-| 24 dB ladder, 12 dB SVF (low-pass), HP cascade, `shapeTriodeK`, with `synth_dsp.h`, `nassau_real` and the 32-sample control block | nassau-analogue `Source/DSP` | **`nassau-dsp`** **(decided)**, a new header-only, dependency-free repository that nassau-analogue and this core take as a submodule. Not nassau-plugin-sdk: the core must not need the SDK, and qbx takes the core as a submodule, so qbx would otherwise pull iPlug2 and the VST3 SDK for a few headers |
+| 24 dB ladder, 12 dB SVF (low-pass), HP cascade, `shapeTriodeK`, with `synth_dsp.h`, `nassau_real` and the 32-sample control block | nassau-analogue `Source/DSP` | **`nassau-dsp`** (decided), a header-only repo: the core must not need the SDK, which would pull iPlug2 and the VST3 SDK into qbx for a few headers. Consumed by locator, pinned once in nassau-suite (§9.2) |
 | phase vocoder | qbx `tw303a/sources` | stays in qbx for the native instrument; extracted only when the plugin player needs tempo modes |
 | program format reader and writer | new | this repo's core (no Qt) |
 
