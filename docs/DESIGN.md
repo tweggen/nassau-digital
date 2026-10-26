@@ -61,7 +61,7 @@ Program        name, polyphony, kit-bus drive, output level, master tune, nextId
      │         pan, level, tune, choke group, pad (§7)
      └─ Layer × 1..4
                id, sample, start/end, loop points, beats (tempo modes),
-               velLo..velHi, tune, level, pan, reverse
+               velLo..velHi, velFade, rrGroup, tune, level, pan, reverse
 Sample         immutable PCM: channels (1 or 2), sample rate, frames,
                a generation (§6.1)
 ```
@@ -82,9 +82,16 @@ Sample         immutable PCM: channels (1 or 2), sample rate, frames,
 * **Zones may overlap.** Overlapping zones are how layering across zones and
   crossfades are done; the layers inside a zone are for velocity layers and
   stacks.
-* **Velocity windows.** A layer's window is clamped into its zone's. A
-  velocity inside the zone that no layer covers plays nothing, and the Map view
-  marks the gap; the editor never invents a fill.
+* **Velocity windows are crossfaded** **(decided)**. A layer's window is
+  clamped into its zone's. Each layer has a fade width (`velFade`, in velocity
+  steps) at its window's edges, over which its level ramps with an
+  equal-power curve, so two adjacent layers whose windows overlap by that width
+  crossfade instead of switching. A width of 0 is a hard switch. A velocity
+  inside the zone that no layer covers plays nothing, and the Map view marks
+  the gap; the editor never invents a fill.
+* **Round-robin is in** **(decided)**: layers of a zone that share an `rrGroup`
+  number and overlapping velocity windows take turns. The rule that picks the
+  next one is §2.2.
 * **Choke groups** are by group number only: a note in group *g* cuts the
   voices of group *g*, and nothing else. Zones sharing a key do not choke each
   other unless they share a group.
@@ -105,6 +112,27 @@ ALL.
   type, drive curve, play mode) a relative edit is refused.
 * A relative edit clamps per zone, so it cannot be inverted by the opposite
   edit. Its undo therefore restores each zone's **previous absolute value**.
+
+### 2.2 Which round-robin layer plays
+
+The author asked for round-robin with its per-layer state in the voice
+**(decided)**. The voice keeps which layer it plays for its whole life. Choosing
+that layer is the hard part, because qbx renders a track in independent pages,
+in any order, and may re-render one alone (§6.1): a counter that advances with
+every note would give a page rendered alone a different layer than the same
+page rendered after its predecessor, and renders would stop being
+byte-identical.
+
+**Proposal:** the choice is a function of the note, not of the notes before it.
+The layer is picked by a hash of the note's **position on the timeline** (in
+project frames), its key and the zone id, modulo the group's size, with the
+rule that it never repeats the layer of the same key's previous note when that
+note is in the same page. The same note at the same place always plays the
+same layer, live and rendered, and neighbouring hits differ. It is not a strict
+cycle (A B C A B C): a strict cycle needs the count of every earlier note of
+the zone, which a page does not have. If a strict cycle matters, the count can
+come from the track's MIDI ahead of the page (qbx's chase already reads back
+for controllers); that is a qbx change and a later gate. To be confirmed (§13).
 
 ## 3. Signal path
 
@@ -146,8 +174,9 @@ The S3000 had a stereo pair and eight individual outputs, and a drum kit is
 mixed through them: a kick on its own channel can duck the bass or open a gate,
 and a snare can get its own reverb. NassauDigital has the same:
 
-* **Main**, a stereo pair, plus **aux outputs** (stereo pairs; how many is open,
-  §13). Every zone has an `output` field: main or aux *n*.
+* **Main**, a stereo pair, plus **eight aux outputs** **(decided: 8)**, each a
+  stereo pair, so a stereo sample or a panned mono one keeps its image on an
+  aux output as on main. Every zone has an `output` field: main or aux 1–8.
 * **Each output is a bus of its own** with its own sum and its own kit-bus
   drive. A zone sent to an aux output does not also reach main, so the kick
   that keys the ducking is not doubled in the mix.
@@ -182,17 +211,21 @@ Amount, curve, mix.
 
 ### 4.4 Modulation, fixed routes
 
-Not a matrix. Proposed set, open (§13):
+Not a matrix. **One LFO** to start with **(decided)**; the rest of the set is
+still undecided and starts as:
 
 * velocity → level, cutoff, sample start;
 * a filter envelope (ADSR) → cutoff;
-* one LFO → pitch, cutoff, pan;
+* the LFO → pitch, cutoff, pan;
 * mod wheel → LFO depth, cutoff.
 
 ### 4.5 Program
 
-Polyphony (a fixed voice pool; choke groups are applied first, then the
-oldest voice is stolen), output level, master tune, kit-bus drive.
+Polyphony **8, 16, 32, 64, 128 or 256 voices** **(decided)**, a fixed voice
+pool allocated when the instrument is prepared, so changing it is a state
+change, not something that happens on the audio path. The default proposed is
+32. Choke groups are applied first, then the oldest voice is stolen. Also:
+output level, master tune, kit-bus drive per output (§3.1).
 
 ## 5. Play modes and loops
 
@@ -206,10 +239,17 @@ Per zone:
 | `tempo-loop` | releases the envelope | loops, at the song tempo | yes |
 | `tempo-oneshot` | ignored | once, at the song tempo | yes |
 
-The tempo modes **(decided)** use the **same stretching qbx uses everywhere**
-**(decided)**: qbx's in-house phase vocoder (`twPagedVocoder`,
-`tw303a/sources`). They need the layer's length in **beats** (`beats`), which
-the editor proposes from the file and the user confirms.
+A tempo mode follows the tempo by one of two methods, chosen per zone, and
+**both are in from the start** **(decided)**:
+
+* **stretch**: the **same stretching qbx uses everywhere** **(decided)**, qbx's
+  in-house phase vocoder (`twPagedVocoder`, `tw303a/sources`). The pitch stays.
+* **resample**: the loop is played faster or slower, so its pitch moves with
+  the tempo, as a turntable or an S3000 without time-stretch would. No render
+  ahead is needed: it is a pitch ratio in the voice, available at once.
+
+Both need the layer's length in **beats** (`beats`), which the editor proposes
+from the file and the user confirms. What follows is about **stretch** only.
 
 The vocoder renders large blocks on worker threads and never runs on the audio
 path, so a tempo layer is **rendered ahead** into a new generation of its
@@ -224,7 +264,8 @@ A layer's sample is one of:
 1. **a file** (WAV, AIFF, FLAC; whatever qbx reads);
 2. **a recording** made in the instrument (§7), stored as a project asset;
 3. **a qbx asset**: anything you can edit in Smaragd (a clip, a comped take, a
-   cut, a sub-arrangement), linked live **(decided)**.
+   cut, a sub-arrangement), linked live **(decided)**, and **from the start**,
+   not as a later gate **(decided)**.
 
 **The core never sees where audio came from.** It is handed immutable sample
 buffers and is told when to use a new one. A buffer is released on a worker,
@@ -367,7 +408,21 @@ edit. So:
 * **Commands are `.qxa` verbs** **(decided: same syntax)**: `add-zone`,
   `set-zone`, `set-layer`, `select-zones`, `place-sampler-recording`, ...
   Every edit is an action, so it is undoable, scriptable, and tested in the
-  headless runner. How a verb addresses the instrument is open (§13).
+  headless runner. The command field takes the XML itself, with no shorthand
+  **(decided)**; it is an editor pane with completion of verbs and attributes,
+  not a one-line field.
+* **Addressing**, proposed: a verb names the instrument the way the plugin
+  verbs already do, by `trackPath` and `slot` (as `set-plugin-param`), and a
+  zone or layer by its stable id:
+
+  ```xml
+  <set-zone trackPath="0" slot="0" zone="17" tune="+2"/>
+  <set-zone trackPath="0" slot="0" zone="all" attack="0.01"/>
+  ```
+
+  A program name is not unique (two instances can load the same program) and
+  can change, so it is not an address. Inside the instrument's own editor the
+  `trackPath`/`slot` pair is implied and may be left out.
 * **Drag and drop**: assets and files come in with qbx's existing
   `application/x-smaragd-resource` payload (`asset:`, `file:`, `media:`).
 * **UI** is Qt, following Smaragd's look; the Nassau plugin style
@@ -416,9 +471,10 @@ kept on load and written back. Proposal:
 ```xml
 <NassauDigitalProgram version="1" name="Kit 1" polyphony="32" busDrive="0.2" nextId="3">
   <zone id="1" keyLo="36" keyHi="36" velLo="0" velHi="127" rootKey="36"
-        mode="oneshot" choke="0" drive="0.4" driveCurve="tube"
+        mode="oneshot" choke="0" output="aux1" drive="0.4" driveCurve="tube"
         filter="lp24" cutoff="8000">
-    <layer id="2" src="audio/kick.wav" velLo="0" velHi="127" tune="0"/>
+    <layer id="2" src="audio/kick.wav" velLo="0" velHi="127" velFade="0"
+           rrGroup="0" tune="0"/>
   </zone>
 </NassauDigitalProgram>
 ```
@@ -436,27 +492,51 @@ plus an `audio/` folder.
 
 ## 13. Open questions
 
-For the author:
+For the author. Answered inline on 2026-10-26 (the answers are the author's
+own words); each is now applied in the section named after it. What is still
+open is collected under **Still open** below.
 
-1. **Tempo modes in v1** (challenged by the review): stretch with the vocoder
+1. → §5. **Tempo modes in v1** (challenged by the review): stretch with the vocoder
    from the start as decided, or a first version that resamples to the tempo
    (the pitch moves) with the vocoder after it?
-2. **Order of sources** (challenged by the review): files and recordings
+   Timo: Please both from the getgo.
+2. → §6. **Order of sources** (challenged by the review): files and recordings
    first and the live asset link as its own later gate, or the link from the
    start?
-3. **Outputs**: how many aux pairs (the S3000's eight individual outputs
+   Timo: Assets from the start, please.
+3. → §3.1. **Outputs**: how many aux pairs (the S3000's eight individual outputs
    would be four stereo pairs, or eight mono outputs)? And are return tracks
    plus sidechain inputs a qbx proposal of their own, ahead of the sampler, or
    part of the sampler's (§3.1)?
-4. **Modulation routes**: is §4.4's fixed set right, and does one LFO suffice?
-5. **Velocity layers**: hard switches only, or crossfaded windows?
-6. **Round-robin**: in or out? If out, it goes on §1's list, because it is the
+   Timo: 8 outputs is fine.
+4. → §4.4. **Modulation routes**: is §4.4's fixed set right, and does one LFO suffice?
+   Timo: Undecided. Let's start with one LFO.
+5. → §2. **Velocity layers**: hard switches only, or crossfaded windows?
+   Timo: Crossfaded
+6. → §2, §2.2. **Round-robin**: in or out? If out, it goes on §1's list, because it is the
    one feature that forces per-layer state into the voice.
-7. **Command shorthand**: type the XML, or a one-line form that maps to it
+   Timo: In, please. Keep per-layer state in voice.
+7. → §9.3. **Command shorthand**: type the XML, or a one-line form that maps to it
    mechanically (`set-zone tune=+2`)?
-8. **Addressing**: does a verb name the instrument by track and slot, like
+   Timo: XML would be fine. This cries for IDE or dedicated editor anyway.
+8. → §9.3 (a proposal). **Addressing**: does a verb name the instrument by track and slot, like
    `set-plugin-param`, or by a program name?
-9. **Polyphony**: a default (32?) and a maximum.
+   Timo: Undecided. Please suggest.
+9. → §4.5. **Polyphony**: a default (32?) and a maximum.
+   Timo: 8 to 256 in 2 by the power of n steps.
+
+**Still open:**
+
+* **Return tracks and sidechain inputs** (the second half of 3): their own qbx
+  proposal, built before the sampler, or part of the sampler's? Proposed: their
+  own, because every multi-output plugin and every ducking compressor needs
+  them, not only this instrument.
+* **Round-robin choice** (§2.2): is a layer chosen by the note's position,
+  stateless and the same live and rendered, good enough, or must it be a strict
+  cycle, which needs a qbx change?
+* **Addressing** (§9.3): the proposal is `trackPath` + `slot` + stable zone id.
+* **Polyphony default**: proposed 32.
+* **Modulation routes** beyond the one LFO (§4.4).
 
 To measure in the gates: the interpolator, the oversampling factor, and the
 CPU budget per voice, which should be named first.
