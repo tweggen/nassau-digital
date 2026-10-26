@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "nd_envelope.h"
+#include "nd_voice_fx.h"
 
 namespace nd {
 
@@ -68,7 +69,9 @@ struct ZoneRt {
     int keyLo = 0, keyHi = 127, velLo = 0, velHi = 127, rootKey = 60;
     bool keyTrack = true;
     PlayMode mode = PlayMode::Gated;
-    double cutoff = 20000.0, resonance = 0.0, drive = 0.0;
+    FilterType filter = FilterType::Lp24;
+    DriveCurve driveCurve = DriveCurve::Soft;
+    double cutoff = 20000.0, resonance = 0.0, drive = 0.0, driveMix = 1.0;
     Envelope::Times amp, filt;
     double lfoRate = 2.0, lfoToPitch = 0.0, lfoToCutoff = 0.0, lfoToPan = 0.0;
     double velToLevel = 1.0, velToCutoff = 0.0, velToStart = 0.0;
@@ -101,9 +104,12 @@ std::unique_ptr<ProgramRt> compile(const Program& p) {
         r.rootKey = z.rootKey;
         r.keyTrack = z.keyTrack;
         r.mode = z.mode;
+        r.filter = z.filter;
+        r.driveCurve = z.driveCurve;
         r.cutoff = z.cutoff;
         r.resonance = z.resonance;
         r.drive = z.drive;
+        r.driveMix = z.driveMix;
         r.amp = {z.attack, z.hold, z.decay, z.sustain, z.release};
         r.filt = {z.filterAttack, 0.0, z.filterDecay, z.filterSustain, z.filterRelease};
         r.lfoRate = z.lfoRate;
@@ -171,7 +177,10 @@ struct Voice {
     double lfoPhase = 0.0;   // cycles, from note-on
     int ctrlLeft = 0;
     float panL = 1.0f, panR = 1.0f;
-    double cutoffHz = 20000.0;  // what the drive/filter stage (C5) is handed
+    int64_t age = 0;            // samples since note-on
+    double velocity01 = 0.0;
+    VoiceFx fx;                 // the drive -> filter slot (C5)
+    VoiceFxParams fxParams;     // this control block's, modulation applied
     bool fading = false;
     int64_t fadeLeft = 0, fadeTotal = 1;  // fade gain = fadeLeft / fadeTotal, exactly 0 at the end
 };
@@ -298,6 +307,8 @@ struct Instrument::Impl {
     uint64_t nextSeq = 1;
     int modWheel = 0;
     int64_t cutFadeSamples = 240;
+    ModulationTap tap = nullptr;
+    void* tapUser = nullptr;
 
     const Sample* findSample(uint32_t layerId, std::shared_ptr<const Sample>** ref) {
         size_t lo = 0, hi = samples.size();
@@ -534,7 +545,12 @@ struct Instrument::Impl {
             if (L.loopHi - L.loopLo < 2) L.loop = false;
             L.reverse = lr.reverse;
             if (L.hi - L.lo < 1) continue;
-            L.pos = L.reverse ? static_cast<double>(L.hi - 1) : static_cast<double>(L.lo);
+            // velocity -> sample start: velToStart frames later at velocity 0,
+            // none at 127 (DESIGN §4.4). A reversed layer starts that much
+            // earlier from its end.
+            const double skip = std::floor(z.velToStart * (1.0 - v01));
+            L.pos = L.reverse ? static_cast<double>(L.hi - 1) - skip : static_cast<double>(L.lo) + skip;
+            if (L.pos < static_cast<double>(L.lo) || L.pos >= static_cast<double>(L.hi)) continue;
             L.factor = std::exp2(lr.tune / 12.0) * s->sampleRate() / sampleRate;
             const double g = voiceGain * dbToGain(lr.level) * velGains[n];
             const double pan = clampd(lr.pan, -1.0, 1.0);
@@ -559,6 +575,14 @@ struct Instrument::Impl {
         v.filt.setup(z.filt, sampleRate);
         v.amp.noteOn();
         v.filt.noteOn();
+        v.velocity01 = v01;
+        v.fxParams.filter = z.filter;
+        v.fxParams.resonance = z.resonance;
+        v.fxParams.driveCurve = z.driveCurve;
+        v.fxParams.drive = z.drive;
+        v.fxParams.driveMix = z.driveMix;
+        v.fxParams.cutoffHz = z.cutoff;
+        v.fx.start(v.fxParams, sampleRate);
         v.ctrlLeft = 0;
         order[static_cast<size_t>(numOrder++)] = slot;
     }
@@ -583,13 +607,34 @@ struct Instrument::Impl {
         const double lfo = std::sin(2.0 * kPi * v.lfoPhase);
         v.lfoPhase += z.lfoRate * kControlBlock / sampleRate;
         v.lfoPhase -= std::floor(v.lfoPhase);
-        const double semis = v.keyOffset + z.tune + rt_masterTune(v) + lfo * z.lfoToPitch;
+        const double w = static_cast<double>(modWheel) / 127.0;
+        // The mod wheel scales the LFO's depth (DESIGN §4.4).
+        const double depth = 1.0 - z.modWheelToLfoDepth + z.modWheelToLfoDepth * w;
+        const double semis = v.keyOffset + z.tune + rt_masterTune(v) + lfo * depth * z.lfoToPitch;
         const double vf = std::exp2(semis / 12.0);
         for (int j = 0; j < v.numLayers; ++j) v.layers[j].inc = v.layers[j].factor * vf;
-        const double pan = clampd(z.pan + lfo * z.lfoToPan, -1.0, 1.0);
+        const double pan = clampd(z.pan + lfo * depth * z.lfoToPan, -1.0, 1.0);
         // The voice's pan stage works on a stereo signal: a balance.
         v.panL = static_cast<float>(pan > 0.0 ? 1.0 - pan : 1.0);
         v.panR = static_cast<float>(pan < 0.0 ? 1.0 + pan : 1.0);
+        const double cutSemis = z.velToCutoff * v.velocity01 + z.filterEnvAmount * v.filt.value() +
+                                z.lfoToCutoff * lfo * depth + z.modWheelToCutoff * w +
+                                z.filterKeyTrack * static_cast<double>(v.key - z.rootKey);
+        v.fxParams.cutoffHz = clampd(z.cutoff * std::exp2(cutSemis / 12.0), 20.0, 20000.0);
+        if (tap) {
+            ModulationFrame f;
+            f.zoneId = z.id;
+            f.key = v.key;
+            f.age = v.age;
+            f.ampEnv = v.amp.value();
+            f.filterEnv = v.filt.value();
+            f.lfo = lfo;
+            f.lfoDepth = depth;
+            f.pitch = semis;
+            f.pan = pan;
+            f.cutoffHz = v.fxParams.cutoffHz;
+            tap(tapUser, f);
+        }
     }
 
     double rt_masterTune(const Voice&) const { return rt ? rt->masterTune : 0.0; }
@@ -611,7 +656,7 @@ struct Instrument::Impl {
                 if (interp == Interpolator::Sinc) renderLayer<Interpolator::Sinc>(L, sinc, bl, br, k);
                 else renderLayer<Interpolator::Hermite4>(L, sinc, bl, br, k);
             }
-            // ---- drive -> filter: gate C5 slots in here, on bl/br ----
+            v.fx.process(v.fxParams, bl, br, k);  // drive -> filter (gate C5), in place
             for (int s = 0; s < k; ++s) {
                 float g = static_cast<float>(v.amp.next());
                 v.filt.next();
@@ -624,6 +669,7 @@ struct Instrument::Impl {
             }
             done += k;
             v.ctrlLeft -= k;
+            v.age += k;
 
             bool anyLayer = false;
             for (int j = 0; j < v.numLayers; ++j) anyLayer = anyLayer || v.layers[j].active;
@@ -749,5 +795,10 @@ void Instrument::process(int64_t timelineFrame, const Event* events, int numEven
 }
 
 int Instrument::activeVoices() const { return impl_->numOrder; }
+
+void Instrument::setModulationTap(ModulationTap tap, void* user) {
+    impl_->tap = tap;
+    impl_->tapUser = user;
+}
 
 }  // namespace nd
