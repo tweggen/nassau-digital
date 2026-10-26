@@ -263,6 +263,22 @@ DESIGN §5 (`tempo-loop`, `tempo-oneshot`, method `resample`).
 
 DESIGN §8.
 
+**DONE 2026-10-26.** `Tests/overlay_tests` 27/27, `Source/Core/nd_overlay.*`
+(the §12 overlay: `set-zone` and `set-layer` with absolute values, applied in
+order, each edit reported applied / orphaned / refused / unknown). C8.1: base
+v3 + an overlay editing zone 17 (attack, tune, level) and layer 6 equals the
+direct edits (structural) and renders byte-identical (cmp); the base alone
+differs (RMS 0.4320 vs 0.3674 from key 40's note-on); the base is unchanged.
+C8.2: on v4 without zone 17, exactly edit #0 is reported orphaned (id 17),
+the result equals v4 with only the layer-6 edit (structural and cmp), the
+overlay writes the same bytes, and v3 gets the kept edit back; a dropped layer
+orphans its `set-layer` alike. C8.3: the flattened program, written and read
+back, has no overlay element, no `base`/`baseVersion` and no library path,
+equals base + overlay and renders byte-identical (cmp). The overlay
+round-trips byte-identically with an unknown root attribute and verb.
+Watched failing: `set-zone` reaching every zone (C8.1, 2 checks), an orphan
+stopping the overlay (C8.2, 3), flatten dropping the overlay (C8.3, 2).
+
 * **C8.1** Base v3 + an overlay that edits zone 17: what plays equals a
   program with the edit made directly (`cmp`).
 * **C8.2** Base v4 drops zone 17: the edit is kept, reported as orphaned, and
