@@ -20,6 +20,9 @@ target_compile_definitions(program_tests PRIVATE
 nd_add_test(voice_tests)
 nd_add_test(interp_tests)
 
+# ---- C3: layers, velocity, round-robin, voices ---------------------------------
+nd_add_test(layers_tests)
+
 # ---- C0.2: the R2 header check, on the real core and on fixtures ------------
 # The build already runs the check on Source/Core (Source/Core/CMakeLists.txt);
 # this repeats it as a test so a ctest run reports it by name, and proves the

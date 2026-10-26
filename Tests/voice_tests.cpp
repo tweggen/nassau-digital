@@ -14,6 +14,7 @@
 #include "nd_instrument.h"
 #include "render_util.h"
 #include "test_util.h"
+#include "alloc_counter.h"
 
 #include <atomic>
 #include <cstdlib>
@@ -23,24 +24,6 @@
 using namespace nd;
 using namespace ndtest;
 
-// ---- R3: a global allocation counter ------------------------------------------
-namespace {
-std::atomic<long long> gNews{0};
-}
-void* operator new(std::size_t sz) {
-    ++gNews;
-    if (void* p = std::malloc(sz ? sz : 1)) return p;
-    throw std::bad_alloc();
-}
-void* operator new[](std::size_t sz) {
-    ++gNews;
-    if (void* p = std::malloc(sz ? sz : 1)) return p;
-    throw std::bad_alloc();
-}
-void operator delete(void* p) noexcept { std::free(p); }
-void operator delete[](void* p) noexcept { std::free(p); }
-void operator delete(void* p, std::size_t) noexcept { std::free(p); }
-void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
 
 namespace {
 
@@ -269,7 +252,7 @@ int main() {
         std::sort(notes.begin(), notes.end(), [](const Note& a, const Note& b) { return a.frame < b.frame; });
         std::vector<Event> ev(notes.size());
         std::vector<float> l(256), r(256);
-        const long long before = gNews.load();
+        const long long before = newCount().load();
         size_t next = 0;
         int maxVoices = 0;
         for (int64_t b = 0; b < 400 * 600 + 48000; b += 256) {
@@ -284,7 +267,7 @@ int main() {
             inst.process(b, ev.data(), ne, l.data(), r.data(), 256);
             maxVoices = std::max(maxVoices, inst.activeVoices());
         }
-        const long long news = gNews.load() - before;
+        const long long news = newCount().load() - before;
         note(std::to_string(400 * 600 + 48000) + " frames, 400 notes, up to " + std::to_string(maxVoices) +
              " voices (stealing at 32): operator new called " + std::to_string(news) + " times");
         check("zero allocations in process()", news == 0);
