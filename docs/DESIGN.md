@@ -36,6 +36,8 @@ In:
   at once **(decided)**;
 * a kit bus with its own drive after all voices **(decided)**;
 * choke groups, so an open hi-hat is cut by the closed one;
+* **multiple outputs**: a zone can go to its own output, so a kick can key a
+  ducking compressor or a gate on another track (§3.1);
 * recording straight into a key or a pad (§7).
 
 Out, permanently. This is the limit that keeps it from becoming Kontakt, whose
@@ -137,6 +139,32 @@ Per voice, one voice per sounding zone:
 * **Sample reading** uses one interpolator for every pitch (a windowed sinc or
   a 4-point Hermite: a measured choice). An S950/SP-1200-style bit and rate
   reduction is a candidate for the Drive's curve list, not a separate stage.
+
+### 3.1 Outputs
+
+The S3000 had a stereo pair and eight individual outputs, and a drum kit is
+mixed through them: a kick on its own channel can duck the bass or open a gate,
+and a snare can get its own reverb. NassauDigital has the same:
+
+* **Main**, a stereo pair, plus **aux outputs** (stereo pairs; how many is open,
+  §13). Every zone has an `output` field: main or aux *n*.
+* **Each output is a bus of its own** with its own sum and its own kit-bus
+  drive. A zone sent to an aux output does not also reach main, so the kick
+  that keys the ducking is not doubled in the mix.
+* **An aux output nobody listens to falls back to main.** qbx tells the
+  instrument which outputs are routed (§9.1); a zone whose output is not routed
+  plays through main, so a kit never goes silent because a return track is
+  missing. Which outputs are routed is state, so renders stay deterministic.
+
+**In qbx this needs new work.** qbx already reports a plugin's extra output
+buses but routes only the first and drops the rest. Its multi-output design
+exists (proposal 37 §5.4): a **return track** whose content is a tap on
+`(track, slot, output)`, with no new engine types. What is missing is that
+return track in the model, its cache sizing and its UI, planned as proposal 37
+P9 and not built. Ducking and gating need one more thing: a plugin on another
+track that reads the return track as its **sidechain** input. The sampler is
+the first instrument to need both, so its qbx proposal (§9) carries them, as
+a qbx feature every multi-output plugin uses, not a sampler feature.
 
 ## 4. Voice parameters
 
@@ -306,9 +334,12 @@ the state blob would put megabytes into the project file and copy them on every
 edit. So:
 
 * The instrument offers an **extension interface**, queried by capability:
-  `twSamplerHost`, with `setProgram(shared_ptr<const Program>)` and
-  `setSample(sampleId, shared_ptr<const Sample>)`. Snapshots are swapped under
-  the slot processor's mutex and read lock-free in `process()`.
+  `twSamplerHost`, with `setProgram(shared_ptr<const Program>)`,
+  `setSample(sampleId, shared_ptr<const Sample>)` and
+  `setRoutedOutputs(mask)` (§3.1). Snapshots are swapped under the slot
+  processor's mutex and read lock-free in `process()`.
+* Its aux outputs are ordinary extra output buses, reported as every plugin's
+  are, so the return-track work in qbx serves every multi-output plugin.
 * The slot's saved state holds only a reference to the program, which lives in
   the model (§9.2).
 
@@ -344,17 +375,21 @@ edit. So:
 
 ### 9.4 Playing live
 
-qbx plays an instrument live through its live lane. Its preconditions are the
-sampler's:
+qbx has a dedicated live path, the **live lane**, and every instrument played
+from a keyboard goes through it: nassau-analogue does today, with a USB MIDI
+keyboard on Windows 11, at a latency the author found low. The sampler takes
+the same path, so it gets the same latency and the same conditions:
 
 * the track is **armed or monitoring**;
 * the **audio device runs at the project's rate**: the live lane refuses
-  otherwise, so a 44.1 kHz project on a 48 kHz device has no live sampler
-  until that limitation in qbx is lifted;
-* latency is about the device block, plus two blocks of lead, plus the
-  device's own buffer. At 1024-frame blocks that is roughly 60–80 ms, too slow
-  to play; at 256 (ASIO) it is playable. The budget is set in §13 and measured
-  in a gate.
+  otherwise, for every instrument, until that limitation in qbx is lifted;
+* the live lane works in the **device's own block size**. Only when a backend
+  reports none does it fall back to 1024 frames, the case the review's
+  60–80 ms estimate assumed (REVIEW.md, finding 1).
+
+What the sampler adds is its own cost per block, which must stay small enough
+not to raise that latency. A gate measures the onset of a live note against
+nassau-analogue's on the same device.
 
 ## 10. Later: the plugin player
 
@@ -409,8 +444,10 @@ For the author:
 2. **Order of sources** (challenged by the review): files and recordings
    first and the live asset link as its own later gate, or the link from the
    start?
-3. **Live latency**: is playing live only on ASIO or small device buffers
-   acceptable for now (§9.4)?
+3. **Outputs**: how many aux pairs (the S3000's eight individual outputs
+   would be four stereo pairs, or eight mono outputs)? And are return tracks
+   plus sidechain inputs a qbx proposal of their own, ahead of the sampler, or
+   part of the sampler's (§3.1)?
 4. **Modulation routes**: is §4.4's fixed set right, and does one LFO suffice?
 5. **Velocity layers**: hard switches only, or crossfaded windows?
 6. **Round-robin**: in or out? If out, it goes on §1's list, because it is the

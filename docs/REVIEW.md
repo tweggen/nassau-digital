@@ -232,7 +232,7 @@ re-checked by hand before acting on them (finding 1's rate refusal, finding
 
 | # | Verdict | In DESIGN.md |
 |---|---|---|
-| 1 | accepted | §9.4: live-play preconditions and a latency budget; a measured round trip is a gate |
+| 1 | accepted in part | §9.4. The preconditions hold (armed or monitoring, device rate = project rate). The latency estimate does not: 60–80 ms is the 1024-frame fallback, used only when a backend reports no block size. The live lane otherwise runs in the device's own block, and nassau-analogue played live through it on Windows 11 with a USB keyboard at a latency the author found low. The gate measures the sampler's live onset against nassau-analogue's on the same device. |
 | 2 | accepted | §9.1: the `twSamplerHost` extension; the slot's state holds the program reference, not PCM |
 | 3 | accepted | §9.2: the core is a submodule under a new engine module `tw/sampler`; the app slice `objects/sampler` wraps the core's program, one model |
 | 4 | accepted | §7: playable at stop, not during capture; `place-sampler-recording`; threshold start is new recorder work |
