@@ -11,6 +11,11 @@ endfunction()
 # ---- C0.1: the scaffold ----------------------------------------------------
 nd_add_test(scaffold_tests)
 
+# ---- C1: program model and XML -----------------------------------------------
+nd_add_test(program_tests)
+target_compile_definitions(program_tests PRIVATE
+    ND_FIXTURE_PROGRAM_FULL="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/program_full.xml")
+
 # ---- C0.2: the R2 header check, on the real core and on fixtures ------------
 # The build already runs the check on Source/Core (Source/Core/CMakeLists.txt);
 # this repeats it as a test so a ctest run reports it by name, and proves the
