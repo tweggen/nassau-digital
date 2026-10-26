@@ -16,6 +16,10 @@ nd_add_test(program_tests)
 target_compile_definitions(program_tests PRIVATE
     ND_FIXTURE_PROGRAM_FULL="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/program_full.xml")
 
+# ---- C2: one voice ------------------------------------------------------------
+nd_add_test(voice_tests)
+nd_add_test(interp_tests)
+
 # ---- C0.2: the R2 header check, on the real core and on fixtures ------------
 # The build already runs the check on Source/Core (Source/Core/CMakeLists.txt);
 # this repeats it as a test so a ctest run reports it by name, and proves the
