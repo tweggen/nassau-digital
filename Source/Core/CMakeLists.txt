@@ -12,6 +12,11 @@ add_library(nassau_digital_core STATIC
     nd_program_xml.cpp
     nd_edit.h
     nd_edit.cpp
+    nd_sample.h
+    nd_interp.h
+    nd_envelope.h
+    nd_instrument.h
+    nd_instrument.cpp
 )
 target_include_directories(nassau_digital_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_options(nassau_digital_core PRIVATE ${ND_WARNING_FLAGS})
