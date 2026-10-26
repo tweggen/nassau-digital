@@ -10,9 +10,11 @@ few things, map a drum kit across the keyboard. Speak into the mic and play it
 on the keyboard a moment later. It is deliberately **not** a can-do-everything
 library engine.
 
-In Smaragd (qbx) any asset you can edit there can be a sample source, kept up
-to date as you edit it. Everywhere else the same program plays from embedded
-audio.
+This repository holds the **core**: the program model and the voice DSP, with
+no Qt and no IPlug2. Its first home is **Smaragd** (qbx), as a native
+instrument, where any asset you can edit can be a sample source, kept up to
+date as you edit it. A plugin that plays exported programs in other DAWs
+follows later on the same core.
 
 **Status: design.** Nothing builds yet. The specification is being written in
 [`docs/DESIGN.md`](docs/DESIGN.md); a gated schedule (`docs/GATES.md`) follows
