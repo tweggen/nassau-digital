@@ -34,6 +34,9 @@ nd_add_test(fx_tests)
 target_compile_definitions(fx_tests PRIVATE
     ND_DSP_FILTER_GOLDEN="${NASSAU_DSP_DIR}/Tests/fixtures/filter_golden.bin")
 
+# ---- C6: outputs ---------------------------------------------------------------
+nd_add_test(outputs_tests)
+
 # ---- C8: libraries, base and overlay -----------------------------------------------
 nd_add_test(overlay_tests)
 # ---- C7: tempo modes by resampling ------------------------------------------------

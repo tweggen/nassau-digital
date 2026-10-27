@@ -92,7 +92,7 @@ struct ProgramRt {
     int polyphony = kDefaultPolyphony;
     double outputGain = 1.0;
     double masterTune = 0.0;
-    double busDrive = 0.0;
+    double busDrive[Instrument::kNumOutputs] = {};  // each output's kit-bus drive (DESIGN §3.1, §4.5)
 };
 
 std::unique_ptr<ProgramRt> compile(const Program& p) {
@@ -100,7 +100,10 @@ std::unique_ptr<ProgramRt> compile(const Program& p) {
     rt->polyphony = isValidPolyphony(p.polyphony) ? p.polyphony : kDefaultPolyphony;
     rt->outputGain = dbToGain(p.outputLevel);
     rt->masterTune = p.masterTune;
-    rt->busDrive = p.busDrive;
+    // The program names one busDrive; every output's bus takes it, each on
+    // its own sum, until the format names an aux output's own (see
+    // nd_instrument.h, "Bus drive per output").
+    for (double& d : rt->busDrive) d = p.busDrive;
     for (const Zone& z : p.zones) {
         ZoneRt r;
         r.id = z.id;
@@ -135,7 +138,7 @@ std::unique_ptr<ProgramRt> compile(const Program& p) {
         r.level = z.level;
         r.tune = z.tune;
         r.choke = z.choke;
-        r.output = z.output;
+        r.output = (z.output >= 0 && z.output <= kNumAuxOutputs) ? z.output : 0;
         for (const Layer& l : z.layers) {
             if (r.numLayers >= kMaxLayers) break;
             LayerRt& o = r.layers[r.numLayers++];
@@ -322,7 +325,32 @@ struct Instrument::Impl {
     int64_t cutFadeSamples = 240;
     int64_t maxTailSamples = 48000;
     VoiceFxShared fx;  // the drive tables and oversampler taps every voice reads
-    KitBus bus;
+    KitBus bus[kNumOutputs];  // each output's kit bus (DESIGN §3.1); [0] is main's
+
+    // ---- Routing (DESIGN §3.1). Output s's voices play on route[s].dest:
+    // s while aux s is routed, main (0) otherwise; while `fading` they move
+    // from `from` to `dest` over kRouteFadeFrames frames, fadeDone of them
+    // done. route[0] is always main.
+    struct Route {
+        int dest = 0;
+        int from = 0;
+        bool fading = false;
+        int fadeDone = 0;
+    };
+    Route route[kNumOutputs];
+    uint32_t routedMask = 0;          // as the host set it: bit k = aux k + 1
+    int drainLeft[kNumOutputs] = {};  // frames an aux bus keeps running after its output stopped being fed
+    bool busRunning[kNumOutputs] = {};
+    // Where the outputs go: the host's buffers for this process() call, null
+    // for an aux output the host gave none. A crossfade away from such an
+    // output (its buffer gone along with its routing) writes that half into
+    // `discard`, which nothing reads.
+    static constexpr int kSegment = 256;  // longest stretch rendered at once
+    float* dstL[kNumOutputs] = {};
+    float* dstR[kNumOutputs] = {};
+    float discardL[kSegment] = {}, discardR[kSegment] = {};
+    uint32_t present = 0;  // the aux outputs with a buffer in this call (auxBit)
+    float fadeL[kSegment] = {}, fadeR[kSegment] = {};  // a crossfading voice, before it is split
     ModulationTap tap = nullptr;
     void* tapUser = nullptr;
 
@@ -708,6 +736,112 @@ struct Instrument::Impl {
         v.fx.process(bl, br, k);
     }
 
+    // ---- Routing ------------------------------------------------------------
+
+    static uint32_t auxBit(int s) { return 1u << (s - 1); }
+
+    // Whether output s's bus has anything coming in: its own voices, or the
+    // tail of a crossfade away from it.
+    bool fed(int s) const { return route[s].dest == s || (route[s].fading && route[s].from == s); }
+
+    bool sounding(int s) const {
+        for (int i = 0; i < numOrder; ++i)
+            if (voices[static_cast<size_t>(order[static_cast<size_t>(i)])].zone.output == s) return true;
+        return false;
+    }
+
+    // Starts the routing changes that are due, at the first frame of a
+    // segment: an aux output goes to itself while routed and present, to main
+    // otherwise. A crossfade under way finishes first; an output nothing
+    // sounds on switches at once.
+    void updateRoutes() {
+        const uint32_t live = routedMask & present;
+        for (int s = 1; s < kNumOutputs; ++s) {
+            Route& r = route[s];
+            const bool wasFed = fed(s);
+            if (r.fading && r.fadeDone >= kRouteFadeFrames) r.fading = false;
+            const int want = (live & auxBit(s)) ? s : 0;
+            if (!r.fading && r.dest != want) {
+                r.from = r.dest;
+                r.dest = want;
+                r.fadeDone = 0;
+                r.fading = sounding(s);
+            }
+            // An aux bus keeps running a while after its feed stops, so the
+            // chain's delay line plays out; then it rests, and starts from
+            // rest (with its own switch-on crossfade) when fed again.
+            if (wasFed && !fed(s)) drainLeft[s] = kRouteFadeFrames;
+            const bool run = (present & auxBit(s)) && (fed(s) || drainLeft[s] > 0);
+            if (busRunning[s] && !run) bus[s].reset();
+            busRunning[s] = run;
+        }
+    }
+
+    // How far the current segment may run from `left` frames remaining: to
+    // the end of a crossfade or a drain, so each is in one state per segment.
+    int segmentLimit(int left) const {
+        int k = std::min(left, kSegment);
+        for (int s = 1; s < kNumOutputs; ++s) {
+            if (route[s].fading) k = std::min(k, kRouteFadeFrames - route[s].fadeDone);
+            if (drainLeft[s] > 0 && !fed(s)) k = std::min(k, drainLeft[s]);
+        }
+        return std::max(k, 1);
+    }
+
+    // Renders voice v's next k frames at offset pos onto its output's
+    // destination; while that output crossfades, split between the old
+    // destination and the new. Returns false when the voice ended.
+    float* outL(int s, int pos) { return dstL[s] ? dstL[s] + pos : discardL; }
+    float* outR(int s, int pos) { return dstR[s] ? dstR[s] + pos : discardR; }
+
+    bool renderRouted(Voice& v, int pos, int k) {
+        const Route& r = route[v.zone.output];
+        // A steady destination always has a buffer: updateRoutes() sends an
+        // output without one to main.
+        if (!r.fading) return render(v, dstL[r.dest] + pos, dstR[r.dest] + pos, k);
+        std::fill(fadeL, fadeL + k, 0.0f);
+        std::fill(fadeR, fadeR + k, 0.0f);
+        const bool alive = render(v, fadeL, fadeR, k);
+        float *aL = outL(r.from, pos), *aR = outR(r.from, pos);
+        float *bL = outL(r.dest, pos), *bR = outR(r.dest, pos);
+        for (int i = 0; i < k; ++i) {
+            // Equal gain: the same signal on two outputs, which a mix sums coherently.
+            const float t = static_cast<float>(r.fadeDone + i + 1) / static_cast<float>(kRouteFadeFrames);
+            aL[i] += (1.0f - t) * fadeL[i];
+            aR[i] += (1.0f - t) * fadeR[i];
+            bL[i] += t * fadeL[i];
+            bR[i] += t * fadeR[i];
+        }
+        return alive;
+    }
+
+    // After a segment's voices: each running bus over the segment (with a
+    // program; without one there is no bus drive), then the crossfades and
+    // drains move on (always: voices outlive a cleared program).
+    void finishSegment(int pos, int k) {
+        if (rt) {
+            for (int s = 0; s < kNumOutputs; ++s) {
+                if (s > 0 && !busRunning[s]) continue;
+                bus[s].process(dstL[s] + pos, dstR[s] + pos, k);
+            }
+        }
+        for (int s = 1; s < kNumOutputs; ++s) {
+            if (route[s].fading) route[s].fadeDone += k;
+            if (drainLeft[s] > 0 && !fed(s)) drainLeft[s] -= k;
+        }
+    }
+
+    // reset(): the routing as asked for, at once, every aux bus at rest.
+    void snapRoutes() {
+        for (int s = 0; s < kNumOutputs; ++s) {
+            route[s] = Route{};
+            route[s].dest = (s > 0 && (routedMask & auxBit(s))) ? s : 0;
+            drainLeft[s] = 0;
+            bus[s].reset();
+            busRunning[s] = (s == 0) || route[s].dest == s;
+        }
+    }
+
     // Renders one voice, adding into out. Returns false when the voice ended.
     bool render(Voice& v, float* outL, float* outR, int n) {
         int done = 0;
@@ -767,7 +901,7 @@ void Instrument::prepare(double sampleRate) {
     m.cutFadeSamples = std::max<int64_t>(1, static_cast<int64_t>(std::llround(kCutFadeSeconds * m.sampleRate)));
     m.maxTailSamples = static_cast<int64_t>(std::llround(kMaxTailSeconds * m.sampleRate));
     m.fx.build(m.sampleRate);
-    m.bus.prepare(&m.fx);
+    for (KitBus& b : m.bus) b.prepare(&m.fx);
     if (!m.sinc.built()) m.sinc.build();
     m.voices.assign(static_cast<size_t>(kSlots), Voice{});
     m.order.assign(static_cast<size_t>(kSlots), 0);
@@ -845,7 +979,7 @@ void Instrument::reset() {
     m.numOrder = 0;
     m.nextSeq = 1;
     m.modWheel = 0;
-    m.bus.reset();
+    m.snapRoutes();
     m.startPage();
 }
 
@@ -859,16 +993,40 @@ double Instrument::tempo() const { return impl_->tempo; }
 
 void Instrument::process(int64_t timelineFrame, const Event* events, int numEvents, float* outL, float* outR,
                          int n) {
+    float* const mainBus[2] = {outL, outR};
+    float* const* const buses[1] = {mainBus};
+    process(timelineFrame, events, numEvents, buses, 1, n);
+}
+
+void Instrument::process(int64_t timelineFrame, const Event* events, int numEvents, float* const* const* outBuses,
+                         int numBuses, int n) {
     Impl& m = *impl_;
-    for (int i = 0; i < n; ++i) {
-        outL[i] = 0.0f;
-        outR[i] = 0.0f;
+    // The outputs the host handed a buffer for; every one is overwritten.
+    m.present = 0;
+    for (int b = 0; b < kNumOutputs; ++b) {
+        float* const* bus = (b < numBuses && outBuses) ? outBuses[b] : nullptr;
+        const bool have = bus && bus[0] && bus[1];
+        if (b == 0 && !have) return;  // no main: nothing to render into
+        if (have) {
+            if (b > 0) m.present |= Impl::auxBit(b);
+            std::fill(bus[0], bus[0] + n, 0.0f);
+            std::fill(bus[1], bus[1] + n, 0.0f);
+        }
+        m.dstL[b] = have ? bus[0] : nullptr;
+        m.dstR[b] = have ? bus[1] : nullptr;
     }
     if (m.voices.empty()) return;  // not prepared
+    // Each output's kit-bus drive, taken at the block's start (as before C6).
+    if (m.rt)
+        for (int s = 0; s < kNumOutputs; ++s) m.bus[s].setDrive(m.rt->busDrive[s]);
     int pos = 0;
     int e = 0;
     while (pos < n || e < numEvents) {
-        // Events at this frame first.
+        // The routing changes due at this frame, before its events: a change
+        // the host made between two calls is in place for the next call's
+        // first note.
+        m.updateRoutes();
+        // Events at this frame.
         while (e < numEvents && events[e].offset <= pos) {
             const Event& ev = events[e++];
             switch (ev.type) {
@@ -881,28 +1039,31 @@ void Instrument::process(int64_t timelineFrame, const Event* events, int numEven
             }
         }
         if (pos >= n) break;
-        const int until = (e < numEvents) ? std::min(n, std::max(pos + 1, static_cast<int>(events[e].offset))) : n;
+        int until = (e < numEvents) ? std::min(n, std::max(pos + 1, static_cast<int>(events[e].offset))) : n;
+        until = pos + m.segmentLimit(until - pos);
+        const int k = until - pos;
         for (int i = 0; i < m.numOrder;) {
             Voice& v = m.voices[static_cast<size_t>(m.order[static_cast<size_t>(i)])];
-            if (!m.render(v, outL + pos, outR + pos, until - pos)) {
+            if (!m.renderRouted(v, pos, k)) {
                 m.killVoice(v);
                 m.removeFromOrder(i);
             } else {
                 ++i;
             }
         }
+        // The kit bus of each output after the sum of its voices (DESIGN §3).
+        m.finishSegment(pos, k);
         pos = until;
     }
-    // The kit bus, after the sum of every voice (DESIGN §3), then the output
-    // level.
-    if (m.rt) {
-        m.bus.setDrive(m.rt->busDrive);
-        m.bus.process(outL, outR, n);
-        if (m.rt->outputGain != 1.0) {
-            const float g = static_cast<float>(m.rt->outputGain);
+    // Then the output level, on every output.
+    if (m.rt && m.rt->outputGain != 1.0) {
+        const float g = static_cast<float>(m.rt->outputGain);
+        for (int b = 0; b < kNumOutputs; ++b) {
+            float *l = m.dstL[b], *r = m.dstR[b];
+            if (!l) continue;
             for (int i = 0; i < n; ++i) {
-                outL[i] *= g;
-                outR[i] *= g;
+                l[i] *= g;
+                r[i] *= g;
             }
         }
     }
@@ -918,7 +1079,17 @@ int Instrument::oversampling() const { return impl_->fx.factor; }
 
 int Instrument::oversamplingLatency() const { return impl_->fx.latency(); }
 
-bool Instrument::kitBusOversampling() const { return impl_->bus.engaged(); }
+bool Instrument::kitBusOversampling() const { return impl_->bus[0].engaged(); }
+
+bool Instrument::kitBusOversampling(int output) const {
+    return output >= 0 && output < kNumOutputs && impl_->bus[output].engaged();
+}
+
+void Instrument::setRoutedOutputs(uint32_t mask) {
+    impl_->routedMask = mask & ((1u << kNumAuxOutputs) - 1u);
+}
+
+uint32_t Instrument::routedOutputs() const { return impl_->routedMask; }
 
 void Instrument::setModulationTap(ModulationTap tap, void* user) {
     impl_->tap = tap;
