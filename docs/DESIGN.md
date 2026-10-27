@@ -156,6 +156,12 @@ Per voice, one voice per sounding zone:
   modes do not exist there and are a **later gate** of their own. The
   analogue code assumes its `synth_dsp.h`, `nassau_real` and a 32-sample
   control block; sharing it means moving those with it (§11).
+  **`off` is a filter type of its own and the default (decided
+  2026-10-27):** a true bypass that costs nothing, so a zone plays its
+  sample as it is, up to the interpolator, until a filter is chosen. It is an
+  appended enum value, so older programs read unchanged; a program that names
+  `lp24` keeps it. (C5 had made `lp24` at 20 kHz the default, which coloured
+  every voice: −2.6 dB at 15 kHz, about 30 ns per voice.)
 * **Kit-bus drive** after the sum **(decided)**: overlapping hits distort
   together, the 909 driven into a hot desk channel.
 * **Oversampling.** Distortion aliases. A voice's drive and filter run
@@ -205,7 +211,8 @@ ADSR plus hold, per zone. One-shot zones ignore note-off (§5).
 
 ### 4.2 Filter
 
-Type, cutoff, resonance, key tracking, envelope amount.
+Type (`off` by default, decided 2026-10-27; §3), cutoff, resonance, key
+tracking, envelope amount.
 
 ### 4.3 Drive
 
@@ -421,7 +428,9 @@ edit. So:
   its own `.gitmodules`, would not tag it. Sibling checkouts are also what an
   IDE opened on the workspace works with.
 * The app side is a new slice **`objects/sampler`**, at the rank of
-  `objects/midi`. Its model objects **wrap the core's program**: there is one
+  `objects/midi` **(decided 2026-10-27, proposal 56 Q-6)**: it does **not**
+  depend on `objects/track`, although the slot it configures lives there; the
+  shell installs the slot's instance initializer as a hook. Its model objects **wrap the core's program**: there is one
   model, Qt-free inside, with undo, links and signals outside. A layer's asset
   source is an ordinary link to the asset, so renaming an asset changes
   nothing.
@@ -441,17 +450,18 @@ edit. So:
   **(decided)**; it is an editor pane with completion of verbs and attributes,
   not a one-line field.
 * **Addressing** **(decided)**: a verb names the instrument the way the plugin
-  verbs already do, by `trackPath` and `slot` (as `set-plugin-param`), and a
+  verbs already do, by `trackPath` and `slotIndex` (the attribute
+  `set-plugin-param` uses; **decided 2026-10-27**, proposal 56 Q-5), and a
   zone or layer by its stable id:
 
   ```xml
-  <set-zone trackPath="0" slot="0" zone="17" tune="+2"/>
-  <set-zone trackPath="0" slot="0" zone="all" attack="0.01"/>
+  <set-zone trackPath="0" slotIndex="0" zone="17" tune="+2"/>
+  <set-zone trackPath="0" slotIndex="0" zone="all" attack="0.01"/>
   ```
 
   A program name is not unique (two instances can load the same program) and
   can change, so it is not an address. Inside the instrument's own editor the
-  `trackPath`/`slot` pair is implied and may be left out.
+  `trackPath`/`slotIndex` pair is implied and may be left out.
 * **Drag and drop**: assets and files come in with qbx's existing
   `application/x-smaragd-resource` payload (`asset:`, `file:`, `media:`).
 * **UI** is Qt, following Smaragd's look; the Nassau plugin style
@@ -564,7 +574,9 @@ open is collected under **Still open** below.
   own, built before the sampler's multi-output gate (§3.1).
 * **Round-robin by position** (§2.2): tried first; a strict cycle only if it
   does not satisfy in use.
-* **Addressing** by `trackPath` + `slot` + stable zone id (§9.3), agreed.
+* **Addressing** by `trackPath` + `slotIndex` + stable zone id (§9.3), agreed
+  (the attribute's name settled on 2026-10-27: `slotIndex`, as the plugin
+  verbs write it).
 * **Polyphony** defaults to 32 voices (§4.5), agreed.
 * **Modulation** (§4.4): one LFO and no further routes foreseen; the fixed set
   listed there is the whole of it.
