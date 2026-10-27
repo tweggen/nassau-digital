@@ -10,7 +10,7 @@
 #
 # The developer's build. The gate (ci/gates.sh) uses its own build-ci/ tree,
 # so running one never invalidates the other. Nothing is installed: this repo
-# is a library that qbx builds from source as a submodule (DESIGN §9.2).
+# is a library that qbx builds from source through its locator (DESIGN §9.2).
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

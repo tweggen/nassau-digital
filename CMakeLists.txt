@@ -4,7 +4,19 @@ project(NassauDigital VERSION 0.1.0 LANGUAGES CXX)
 # The dependency-free core of NassauDigital (docs/DESIGN.md): no Qt, no IPlug2,
 # no SDK (R2). Unlike the plugin repos this project does NOT include the
 # Nassau SDK's project prologue: the core must build from its own checkout,
-# because qbx takes it as a submodule (DESIGN §9.2).
+# because qbx builds it from source (DESIGN §9.2).
+#
+# It builds as a SUBPROJECT too: a consumer finds this checkout with the
+# locator cmake/bootstrap/NassauDigital.cmake (copied verbatim into it), which
+# add_subdirectory()s it EXCLUDE_FROM_ALL and links nassau::digital. As a
+# subproject it sets no global build type and adds no tests: the consumer's
+# build gets the core target and nothing else.
+
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    set(ND_TOP_LEVEL ON)
+else()
+    set(ND_TOP_LEVEL OFF)
+endif()
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -14,7 +26,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # build to the next (R8).
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+if(ND_TOP_LEVEL AND NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
@@ -30,8 +42,9 @@ endif()
 # The core, plus the R2 header check that guards it (C0.2).
 add_subdirectory(Source/Core)
 
-# Tests: the hand-rolled harness (Tests/test_util.h), always built.
-option(ND_BUILD_TESTS "Build the test suite" ON)
+# Tests: the hand-rolled harness (Tests/test_util.h), built by default only
+# when this is the top-level project.
+option(ND_BUILD_TESTS "Build the test suite" ${ND_TOP_LEVEL})
 if(ND_BUILD_TESTS)
     enable_testing()
     add_subdirectory(Tests)

@@ -21,7 +21,12 @@ add_library(nassau_digital_core STATIC
     nd_instrument.h
     nd_instrument.cpp
 )
+# The name a consumer links (cmake/bootstrap/NassauDigital.cmake's result).
+add_library(nassau::digital ALIAS nassau_digital_core)
 target_include_directories(nassau_digital_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+# C++17 travels with the target: a subproject does not see this project's
+# CMAKE_CXX_STANDARD unless its parent happens to set the same.
+target_compile_features(nassau_digital_core PUBLIC cxx_std_17)
 target_compile_options(nassau_digital_core PRIVATE ${ND_WARNING_FLAGS})
 
 # ---- C0.2: the R2 header check -------------------------------------------
