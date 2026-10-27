@@ -26,12 +26,18 @@
 //
 // The signal path of one voice (DESIGN §3):
 //
-//   layers (read, pitch, level, layer pan) -> sum -> [drive -> filter] -> amp -> pan -> out
+//   layers (read, pitch, level, layer pan) -> sum -> [drive -> filter] -> amp -> pan
+//   all voices -> sum -> kit-bus drive -> output level -> out
 //
-// The bracketed stage is gate C5's (it waits for nassau-dsp). The voice
-// renders into a stereo block buffer and hands it to that stage (VoiceFx,
-// nd_voice_fx.h) before the amp, with the block's modulated cutoff; today the
-// stage passes the block through unchanged.
+// The bracketed stage (VoiceFx, nd_voice_fx.h) is nassau-dsp's filters behind
+// the drive waveshaper (nd_drive.h), oversampled when the zone's drive is
+// above zero at note-on. Its oversampling delay is compensated: an
+// oversampled voice runs its layers and that stage `oversamplingLatency()`
+// frames ahead of its amp, so it lines up with one that is not.
+//
+// After every voice: the kit bus's drive (nd_kit_bus.h, the program's
+// busDrive), then the program's output level (DESIGN §3: Σ -> kit-bus drive
+// -> output).
 //
 // Tempo (DESIGN §5). A resample tempo mode is one more factor in the read
 // rate, songTempo / layerTempo, applied per control block (setTempo()).
@@ -70,6 +76,8 @@ struct ModulationFrame {
     double pitch = 0.0;       ///< semitones from the sample's recorded pitch, all routes applied (not a resample tempo mode's ratio, which is per layer)
     double pan = 0.0;         ///< the zone pan stage's position, -1..1
     double cutoffHz = 0.0;    ///< what the drive -> filter stage is handed
+    double drive = 0.0;       ///< the drive amount the stage is handed (follows the program)
+    int oversampling = 1;     ///< the voice's oversampling factor, fixed at note-on (1 = none)
 };
 
 /// Called from process() once per sounding voice per control block. It runs
@@ -97,6 +105,13 @@ public:
     static constexpr int kRrMemoryPerKey = 16;
     /// The song tempo until the host sets one, in beats per minute.
     static constexpr double kDefaultTempo = 120.0;
+    /// A voice whose layers have all ended keeps sounding while its drive ->
+    /// filter stage still rings, until a control block's worth of it stays
+    /// below this level...
+    static constexpr float kTailFloor = 1e-6f;
+    /// ...or for at most this long, after which it is faded out (a
+    /// self-oscillating filter on a one-shot zone would never fall silent).
+    static constexpr double kMaxTailSeconds = 1.0;
 
     Instrument();
     ~Instrument();
@@ -153,10 +168,22 @@ public:
     /// Voices sounding (including ones fading out after a steal).
     int activeVoices() const;
 
+    /// The oversampling factor (2 or 4) of a voice whose drive is above zero
+    /// at note-on, and of the kit bus while its drive is above zero (DESIGN
+    /// §3: "a measured choice"; the default is the one docs/GATES.md C5
+    /// measured). Voices already sounding keep theirs. Host thread.
+    void setOversampling(int factor);
+    int oversampling() const;
+    /// The oversampling chain's delay, in frames, at the current factor. A
+    /// voice compensates it; the kit bus, while its drive is on, does not
+    /// (its output is that many frames late then).
+    int oversamplingLatency() const;
+    /// Whether the kit bus is running its oversampled drive (busDrive > 0).
+    bool kitBusOversampling() const;
+
     /// Installs (or with nullptr removes) a tap that sees each voice's
     /// modulation once per control block: for an editor's modulation display,
-    /// and for measuring routes whose target cannot be heard yet (the filter's
-    /// cutoff until gate C5). Host thread.
+    /// and for reading what the drive -> filter stage was handed. Host thread.
     void setModulationTap(ModulationTap tap, void* user);
 
 private:

@@ -7,10 +7,14 @@
 //      the documented direction; the mod wheel scales the LFO's depth.
 //
 // The amp envelope, level, start, pitch and pan are measured on audio. The
-// filter envelope and the cutoff routes have no audible target until gate
-// C5 builds the filter, so they are measured where the voice hands them to
-// the drive -> filter stage: the public modulation tap
-// (Instrument::setModulationTap), once per 32-sample control block.
+// filter envelope and the cutoff routes were first (C4) measured where the
+// voice hands them to the drive -> filter stage, the public modulation tap
+// (Instrument::setModulationTap), because the filter did not exist yet.
+// Since C5 they are also measured on audio (R6): a sine through the lp24
+// ladder at resonance 0, whose magnitude at a frequency f for a cutoff fc is
+// known exactly (four bilinear one-poles: (1 + (tan(pi f/fs) / tan(pi
+// fc/fs))^2)^-2), so the measured level of the sine says the cutoff the
+// filter had.
 
 #include "nd_edit.h"
 #include "nd_envelope.h"
@@ -56,6 +60,29 @@ struct TapLog {
         if (log->frames.size() < log->frames.capacity()) log->frames.push_back(f);  // no allocation in the tap
     }
 };
+
+// The cutoff (Hz) the lp24 ladder at resonance 0 had when a sine of f Hz came
+// out at `gain` times its input level (the inverse of the magnitude above).
+double cutoffFromGain(double gain, double f) {
+    const double t = std::tan(kPi * f / kRate);
+    const double q = std::sqrt(1.0 / gain) - 1.0;  // (t / g)^2
+    if (!(q > 0.0)) return kRate / 2;
+    return std::atan(t / std::sqrt(q)) * kRate / kPi;
+}
+
+// Least-squares line y = a + b x through (x[i], y[i]); returns (a, b).
+std::pair<double, double> fitLine(const std::vector<double>& x, const std::vector<double>& y) {
+    double sx = 0, sy = 0, sxx = 0, sxy = 0;
+    const double n = static_cast<double>(x.size());
+    for (size_t i = 0; i < x.size(); ++i) {
+        sx += x[i];
+        sy += y[i];
+        sxx += x[i] * x[i];
+        sxy += x[i] * y[i];
+    }
+    const double b = (n * sxy - sx * sy) / (n * sxx - sx * sx);
+    return {(sy - b * sx) / n, b};
+}
 
 // Where the line through (x0, y0) and (x1, y1) reaches y.
 double crossAt(double x0, double y0, double x1, double y1, double y) { return x0 + (y - y0) * (x1 - x0) / (y1 - y0); }
@@ -212,6 +239,79 @@ int main() {
              ms(static_cast<double>(dEnd - aEnd)));
         check("the envelope generator alone: attack 40 ms and decay 120 ms, exact to the sample",
               aEnd == at(0.040) && dEnd - aEnd == at(0.120));
+    }
+
+    group("C4.1 the filter envelope on audio (C5's filter): each segment's time +- 1 ms");
+    {
+        // A 1 kHz sine through lp24 (resonance 0) whose cutoff the envelope
+        // moves from 250 Hz (env 0) to 4 kHz (env 1, +48 st). Its level, one
+        // period at a time, gives the cutoff and so the envelope's value. The
+        // sample is stereo: the sine on the left, DC on the right, which the
+        // ladder passes at exactly unity whatever its cutoff, so the right
+        // channel measures the amp envelope (releasing after note-off) and
+        // the left's level is divided by it.
+        Instrument inst;
+        inst.prepare(kRate);
+        Program prog;
+        Zone z = dcZone(PlayMode::Loop);
+        z.cutoff = 250.0;
+        z.filterEnvAmount = 48.0;
+        z.filterAttack = 0.040;
+        z.filterDecay = 0.120;
+        z.filterSustain = 0.3;
+        z.filterRelease = 0.150;
+        z.release = 0.5;
+        z.layers[0].pan = 0.0;  // a stereo layer's pan is a balance: centre = both at unity
+        const double amp = 0.5;
+        installOne(inst, prog, z,
+                   Sample::stereo(kRate, sine(1000.0, kRate, 1.0, amp), std::vector<float>(at(1.0), static_cast<float>(amp))));
+        const size_t tOff = at(0.4);
+        const Stereo a = render(inst, {on(0, 60), off(static_cast<int64_t>(tOff), 60)}, at(0.7));
+        // env(t) at the centre of each 1 ms period.
+        std::vector<double> t, env;
+        for (size_t w = 0; w + 48 <= at(0.62); w += 48) {
+            double dc = 0;
+            for (size_t i = w; i < w + 48; ++i) dc += a.r[i];
+            const double ampEnv = dc / 48.0 / amp;
+            const double level = rms(a.l, w, w + 48) * std::sqrt(2.0) / amp / ampEnv;
+            const double fc = cutoffFromGain(level, 1000.0);
+            t.push_back(static_cast<double>(w) + 24.0);
+            env.push_back(12.0 * std::log2(fc / 250.0) / 48.0);
+        }
+        auto segment = [&](double fromMs, double toMs, std::vector<double>& xs, std::vector<double>& ys) {
+            xs.clear();
+            ys.clear();
+            for (size_t i = 0; i < t.size(); ++i)
+                if (t[i] >= fromMs * kMs && t[i] <= toMs * kMs) {
+                    xs.push_back(t[i]);
+                    ys.push_back(env[i]);
+                }
+        };
+        std::vector<double> xs, ys;
+        segment(10, 30, xs, ys);  // inside the attack
+        const auto atk = fitLine(xs, ys);
+        segment(60, 140, xs, ys);  // inside the decay
+        const auto dec = fitLine(xs, ys);
+        segment(400 + 30, 400 + 120, xs, ys);  // inside the release
+        const auto rel = fitLine(xs, ys);
+        segment(250, 390, xs, ys);  // the sustain
+        double sus = 0;
+        for (double v : ys) sus += v;
+        sus /= static_cast<double>(ys.size());
+        auto cross = [](const std::pair<double, double>& l, double y) { return (y - l.first) / l.second; };
+        const double aStart = cross(atk, 0.0), aEnd = cross(atk, 1.0);
+        const double dStart = cross(dec, 1.0), dEnd = cross(dec, 0.3);
+        const double rStart = cross(rel, 0.3), rEnd = cross(rel, 0.0);
+        note("on audio: attack " + ms(aEnd - aStart) + " (set 40), decay " + ms(dEnd - dStart) + " (120), sustain " +
+             std::to_string(sus) + " (0.3), release " + ms(rEnd - rStart) + " (150); the attack starts " + ms(aStart) +
+             " after note-on, the release " + ms(rStart - static_cast<double>(tOff)) +
+             " after note-off (the cutoff is set per 32-frame block and ramped across the next: about 0.7 ms late)");
+        check("filter attack on audio: 40 ms +- 1 ms", std::fabs(aEnd - aStart - 40 * kMs) <= kMs);
+        check("filter decay on audio: 120 ms +- 1 ms", std::fabs(dEnd - dStart - 120 * kMs) <= kMs);
+        check("filter sustain on audio: 0.3 +- 0.01", std::fabs(sus - 0.3) <= 0.01);
+        check("filter release on audio: 150 ms +- 1 ms", std::fabs(rEnd - rStart - 150 * kMs) <= kMs);
+        check("each segment starts within 1 ms of its event (attack at note-on, release at note-off)",
+              std::fabs(aStart) <= kMs && std::fabs(rStart - static_cast<double>(tOff)) <= kMs);
     }
 
     // ---------------------------------------------------------------- C4.2 ---
@@ -380,6 +480,45 @@ int main() {
         check("LFO -> cutoff swings an octave each way (500 .. 2000 Hz +- 0.5 %)",
               std::fabs(lo / 500.0 - 1.0) < 5e-3 && std::fabs(hi / 2000.0 - 1.0) < 5e-3);
         inst.setModulationTap(nullptr, nullptr);
+    }
+
+    group("C4.2 velocity -> cutoff on audio (C5's filter): higher velocity, higher cutoff");
+    {
+        // A 2 kHz sine through lp24 (resonance 0) at a base cutoff of 1 kHz
+        // with velToCutoff +24: its steady level gives the cutoff.
+        Instrument inst;
+        inst.prepare(kRate);
+        Program prog;
+        Zone z = dcZone(PlayMode::Loop);
+        z.cutoff = 1000.0;
+        z.velToCutoff = 24.0;
+        const double amp = 0.5;
+        installOne(inst, prog, z, Sample::mono(kRate, sine(2000.0, kRate, 1.0, amp)));
+        double fc[3];
+        const int vels[3] = {1, 64, 127};
+        for (int k = 0; k < 3; ++k) {
+            inst.reset();
+            const Stereo a = render(inst, {on(0, 60, vels[k])}, at(0.5));
+            // Goertzel over whole periods (0.1 .. 0.4 s: 600 periods).
+            const double w = 2.0 * kPi * 2000.0 / kRate, c = 2.0 * std::cos(w);
+            double s1 = 0, s2 = 0;
+            for (size_t i = at(0.1); i < at(0.4); ++i) {
+                const double s0 = a.l[i] + c * s1 - s2;
+                s2 = s1;
+                s1 = s0;
+            }
+            const double re = s1 - s2 * std::cos(w), im = s2 * std::sin(w);
+            const double level = 2.0 * std::sqrt(re * re + im * im) / static_cast<double>(at(0.4) - at(0.1)) / amp;
+            fc[k] = cutoffFromGain(level, 2000.0);
+        }
+        const double e1 = 1000.0 * std::exp2(24.0 * 1.0 / 127.0 / 12.0), e64 = 1000.0 * std::exp2(24.0 * 64.0 / 127.0 / 12.0);
+        note("on audio, velToCutoff +24 over a 1 kHz base: cutoff at velocity 1 / 64 / 127 = " + std::to_string(fc[0]) +
+             " / " + std::to_string(fc[1]) + " / " + std::to_string(fc[2]) + " Hz (documented: " + std::to_string(e1) +
+             " / " + std::to_string(e64) + " / 4000)");
+        check("velocity -> cutoff on audio: higher velocity, higher cutoff", fc[0] < fc[1] && fc[1] < fc[2]);
+        check("on audio as documented, each within 0.1 %", std::fabs(fc[0] / e1 - 1.0) < 1e-3 &&
+                                                              std::fabs(fc[1] / e64 - 1.0) < 1e-3 &&
+                                                              std::fabs(fc[2] / 4000.0 - 1.0) < 1e-3);
     }
 
     return summary("mod_tests");

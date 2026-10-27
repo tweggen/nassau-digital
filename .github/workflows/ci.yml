@@ -2,7 +2,8 @@ name: CI
 
 # Every job calls ci/gates.sh and does nothing else of substance: a move off
 # GitHub should rewrite this file, not the gate. The core needs no SDK, no
-# submodules and no secrets, so every job always runs.
+# submodules and no secrets (nassau-dsp is public and fetched at its pin), so
+# every job always runs.
 on:
   push:
     branches: [main]
