@@ -28,6 +28,8 @@ nd_add_test(mod_tests)
 
 # ---- C8: libraries, base and overlay -----------------------------------------------
 nd_add_test(overlay_tests)
+# ---- C7: tempo modes by resampling ------------------------------------------------
+nd_add_test(tempo_tests)
 
 # ---- C0.2: the R2 header check, on the real core and on fixtures ------------
 # The build already runs the check on Source/Core (Source/Core/CMakeLists.txt);

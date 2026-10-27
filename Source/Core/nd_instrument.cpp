@@ -60,7 +60,7 @@ struct LayerRt {
     uint32_t id = 0;
     int64_t start = 0, end = -1, loopStart = -1, loopEnd = -1;
     int velLo = 0, velHi = 127, velFade = 0, rrGroup = 0;
-    double tune = 0.0, level = 0.0, pan = 0.0;
+    double tune = 0.0, level = 0.0, pan = 0.0, beats = 0.0;
     bool reverse = false;
 };
 
@@ -69,6 +69,7 @@ struct ZoneRt {
     int keyLo = 0, keyHi = 127, velLo = 0, velHi = 127, rootKey = 60;
     bool keyTrack = true;
     PlayMode mode = PlayMode::Gated;
+    TempoMethod tempoMethod = TempoMethod::Stretch;
     FilterType filter = FilterType::Lp24;
     DriveCurve driveCurve = DriveCurve::Soft;
     double cutoff = 20000.0, resonance = 0.0, drive = 0.0, driveMix = 1.0;
@@ -104,6 +105,7 @@ std::unique_ptr<ProgramRt> compile(const Program& p) {
         r.rootKey = z.rootKey;
         r.keyTrack = z.keyTrack;
         r.mode = z.mode;
+        r.tempoMethod = z.tempoMethod;
         r.filter = z.filter;
         r.driveCurve = z.driveCurve;
         r.cutoff = z.cutoff;
@@ -144,6 +146,7 @@ std::unique_ptr<ProgramRt> compile(const Program& p) {
             o.tune = l.tune;
             o.level = l.level;
             o.pan = l.pan;
+            o.beats = l.beats;
             o.reverse = l.reverse;
         }
         rt->zones.push_back(r);
@@ -157,6 +160,7 @@ struct VoiceLayer {
     std::shared_ptr<const Sample> sample;  // see Instrument::Impl::retired
     double pos = 0.0;
     double factor = 1.0;  // sample-rate ratio x layer tune
+    double tempoBase = 0.0;  // resample tempo modes: the tempo the layer plays at its own rate (BPM); 0 = none
     double inc = 0.0;     // this control block's step, frames per output frame
     int64_t lo = 0, hi = 0, loopLo = 0, loopHi = 0;
     int channels = 1;
@@ -306,6 +310,7 @@ struct Instrument::Impl {
     int numOrder = 0;
     uint64_t nextSeq = 1;
     int modWheel = 0;
+    double tempo = Instrument::kDefaultTempo;  // the song tempo, BPM (DESIGN §5)
     int64_t cutFadeSamples = 240;
     ModulationTap tap = nullptr;
     void* tapUser = nullptr;
@@ -552,6 +557,16 @@ struct Instrument::Impl {
             L.pos = L.reverse ? static_cast<double>(L.hi - 1) - skip : static_cast<double>(L.lo) + skip;
             if (L.pos < static_cast<double>(L.lo) || L.pos >= static_cast<double>(L.hi)) continue;
             L.factor = std::exp2(lr.tune / 12.0) * s->sampleRate() / sampleRate;
+            // Tempo modes by resampling (DESIGN §5): the layer's `beats` span
+            // its played length [start, end), which at the sample's own rate
+            // makes the tempo it plays at unchanged. At another song tempo the
+            // read rate is scaled by songTempo / that tempo (control()), so
+            // the pitch moves with it. Unknown beats (0) leave the rate alone.
+            // A stretch zone is handed a buffer already rendered to the song
+            // tempo by the host (DESIGN §5), so it plays at its own rate here.
+            const bool tempoMode = (z.mode == PlayMode::TempoLoop || z.mode == PlayMode::TempoOneShot);
+            if (tempoMode && z.tempoMethod == TempoMethod::Resample && lr.beats > 0.0)
+                L.tempoBase = lr.beats * 60.0 * s->sampleRate() / static_cast<double>(L.hi - L.lo);
             const double g = voiceGain * dbToGain(lr.level) * velGains[n];
             const double pan = clampd(lr.pan, -1.0, 1.0);
             if (L.channels == 1) {
@@ -612,7 +627,14 @@ struct Instrument::Impl {
         const double depth = 1.0 - z.modWheelToLfoDepth + z.modWheelToLfoDepth * w;
         const double semis = v.keyOffset + z.tune + rt_masterTune(v) + lfo * depth * z.lfoToPitch;
         const double vf = std::exp2(semis / 12.0);
-        for (int j = 0; j < v.numLayers; ++j) v.layers[j].inc = v.layers[j].factor * vf;
+        // The tempo ratio is read here, once per control block, so a tempo
+        // change reaches a sounding voice at its next control block. Only the
+        // read rate changes, never the read position: the waveform carries on
+        // from where it was, without a step (C7.2).
+        for (int j = 0; j < v.numLayers; ++j) {
+            VoiceLayer& L = v.layers[j];
+            L.inc = L.factor * vf * (L.tempoBase > 0.0 ? tempo / L.tempoBase : 1.0);
+        }
         const double pan = clampd(z.pan + lfo * depth * z.lfoToPan, -1.0, 1.0);
         // The voice's pan stage works on a stereo signal: a balance.
         v.panL = static_cast<float>(pan > 0.0 ? 1.0 - pan : 1.0);
@@ -755,6 +777,12 @@ void Instrument::reset() {
 }
 
 void Instrument::startPage() { impl_->startPage(); }
+
+void Instrument::setTempo(double bpm) {
+    if (std::isfinite(bpm) && bpm > 0.0) impl_->tempo = bpm;
+}
+
+double Instrument::tempo() const { return impl_->tempo; }
 
 void Instrument::process(int64_t timelineFrame, const Event* events, int numEvents, float* outL, float* outR,
                          int n) {
