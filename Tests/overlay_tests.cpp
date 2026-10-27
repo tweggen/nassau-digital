@@ -7,14 +7,23 @@
 //      nothing else changes.
 // C8.3 flatten yields a program that renders byte-identical to base + overlay
 //      and refers to no base.
+// Previous values (decided 2026-10-27, DESIGN §8):
+//      recording an edit, applying it and undoing it gives back the program
+//      and the render from before (cmp); a base that changed a value under an
+//      edit (v5) still plays the overlay's value and reports the edit drifted
+//      with was / now; an ALL edit is expanded into one set-zone per zone,
+//      each with its own previous value.
 // Also: the overlay format round-trips byte-identically with unknown
 //      attributes and verbs; edits that cannot apply are reported and leave
 //      the program as if they were not there.
 //
-// The library: three zones on keys 36, 38 and 40 (ids 5, 9, 17), each with
-// one layer (ids 6, 10, 18) playing its own sine. Version 4 is version 3
-// without zone 17. The overlay edits zone 17 (attack, tune, level) and layer
-// 6 (tune), and carries a verb from a newer writer.
+// The library: three zones on keys 36, 38 and 40 (ids 5, 9, 17; tune 1, -3
+// and the default 0), each with one layer (ids 6, 10, 18) playing its own
+// sine. Version 4 is version 3 without zone 17; version 5 is version 3 with
+// zone 17's attack changed. The overlay edits zone 17 (attack, tune, level)
+// and layer 6 (tune), each value with the one it replaces, and carries a verb
+// from a newer writer. Zone 17's attack is not written in the base, so its
+// `.was` is the default, 0.
 
 #include "nd_edit.h"
 #include "nd_instrument.h"
@@ -33,10 +42,10 @@ namespace {
 constexpr double kRate = 48000.0;
 
 const char* kBaseV3 = R"(<NassauDigitalProgram version="1" name="Library Kit" polyphony="32" nextId="19">
-  <zone id="5" keyLo="36" keyHi="36" rootKey="36" mode="gated" release="0.05">
+  <zone id="5" keyLo="36" keyHi="36" rootKey="36" mode="gated" release="0.05" tune="1">
     <layer id="6" src="audio/a.wav"/>
   </zone>
-  <zone id="9" keyLo="38" keyHi="38" rootKey="38" mode="gated" release="0.05">
+  <zone id="9" keyLo="38" keyHi="38" rootKey="38" mode="gated" release="0.05" tune="-3">
     <layer id="10" src="audio/b.wav"/>
   </zone>
   <zone id="17" keyLo="40" keyHi="40" rootKey="40" mode="gated" release="0.05">
@@ -45,19 +54,32 @@ const char* kBaseV3 = R"(<NassauDigitalProgram version="1" name="Library Kit" po
 </NassauDigitalProgram>
 )";
 
-const char* kBaseV4 = R"(<NassauDigitalProgram version="1" name="Library Kit" polyphony="32" nextId="19">
-  <zone id="5" keyLo="36" keyHi="36" rootKey="36" mode="gated" release="0.05">
+const char* kBaseV5 = R"(<NassauDigitalProgram version="1" name="Library Kit" polyphony="32" nextId="19">
+  <zone id="5" keyLo="36" keyHi="36" rootKey="36" mode="gated" release="0.05" tune="1">
     <layer id="6" src="audio/a.wav"/>
   </zone>
-  <zone id="9" keyLo="38" keyHi="38" rootKey="38" mode="gated" release="0.05">
+  <zone id="9" keyLo="38" keyHi="38" rootKey="38" mode="gated" release="0.05" tune="-3">
+    <layer id="10" src="audio/b.wav"/>
+  </zone>
+  <zone id="17" keyLo="40" keyHi="40" rootKey="40" mode="gated" release="0.05" attack="0.05">
+    <layer id="18" src="audio/c.wav"/>
+  </zone>
+</NassauDigitalProgram>
+)";
+
+const char* kBaseV4 = R"(<NassauDigitalProgram version="1" name="Library Kit" polyphony="32" nextId="19">
+  <zone id="5" keyLo="36" keyHi="36" rootKey="36" mode="gated" release="0.05" tune="1">
+    <layer id="6" src="audio/a.wav"/>
+  </zone>
+  <zone id="9" keyLo="38" keyHi="38" rootKey="38" mode="gated" release="0.05" tune="-3">
     <layer id="10" src="audio/b.wav"/>
   </zone>
 </NassauDigitalProgram>
 )";
 
 const char* kOverlay = R"(<NassauDigitalOverlay version="1" base="Library/Kit.ndp" baseVersion="3" colour="teal">
-  <set-zone zone="17" attack="0.25" tune="-2" level="-6"/>
-  <set-layer layer="6" tune="3"/>
+  <set-zone zone="17" attack="0.25" attack.was="0" tune="-2" tune.was="0" level="-6" level.was="0"/>
+  <set-layer layer="6" tune="3" tune.was="0"/>
   <set-swing zone="9" amount="0.6"/>
 </NassauDigitalOverlay>
 )";
@@ -100,6 +122,7 @@ const char* stateName(OverlayEditState s) {
         case OverlayEditState::Orphaned: return "orphaned";
         case OverlayEditState::Refused: return "refused";
         case OverlayEditState::Unknown: return "unknown";
+        case OverlayEditState::Drifted: return "drifted";
     }
     return "?";
 }
@@ -110,6 +133,7 @@ std::string describe(const OverlayResult& r) {
         if (!s.empty()) s += ", ";
         s += "#" + std::to_string(e.index) + " " + stateName(e.state);
         if (e.state == OverlayEditState::Orphaned) s += " (id " + std::to_string(e.missingId) + ")";
+        for (const auto& d : e.drift) s += " (" + d.attr + " was " + d.was + ", now " + d.now + ")";
     }
     return s;
 }
@@ -121,6 +145,7 @@ int main() {
 
     const Program v3 = parsed(kBaseV3);
     const Program v4 = parsed(kBaseV4);
+    const Program v5 = parsed(kBaseV5);
     const OverlayParseResult op = parseOverlay(kOverlay);
 
     group("The overlay format (DESIGN §12)");
@@ -220,13 +245,19 @@ int main() {
             OverlayEditState expect;
         };
         const Case cases[] = {
-            {R"(<set-zone zone="9" tune="+2"/>)", OverlayEditState::Refused},        // relative: not defined here
-            {R"(<set-zone zone="9" tune="500"/>)", OverlayEditState::Refused},       // out of range
-            {R"(<set-zone zone="9" wobble="1"/>)", OverlayEditState::Refused},       // unknown parameter
-            {R"(<set-zone zone="nine" tune="1"/>)", OverlayEditState::Refused},      // malformed address
-            {R"(<set-layer tune="1"/>)", OverlayEditState::Refused},                 // no address
-            {R"(<set-zone zone="9" tune="1" mode="tape"/>)", OverlayEditState::Refused},  // all-or-nothing
-            {R"(<set-zone zone="99" tune="1"/>)", OverlayEditState::Orphaned},
+            {R"(<set-zone zone="9" tune="+2" tune.was="-3"/>)", OverlayEditState::Refused},  // a stored relative value
+            {R"(<set-zone zone="9" tune="1" tune.was="+0"/>)", OverlayEditState::Refused},   // ...in .was too
+            {R"(<set-zone zone="9" tune="1"/>)", OverlayEditState::Refused},                 // no .was
+            {R"(<set-zone zone="9" tune.was="-3"/>)", OverlayEditState::Refused},            // .was alone
+            {R"(<set-zone zone="9" tune="500" tune.was="-3"/>)", OverlayEditState::Refused}, // out of range
+            {R"(<set-zone zone="9" tune="1" tune.was="x"/>)", OverlayEditState::Refused},    // malformed .was
+            {R"(<set-zone zone="9" wobble="1" wobble.was="0"/>)", OverlayEditState::Refused},  // unknown parameter
+            {R"(<set-zone zone="nine" tune="1" tune.was="0"/>)", OverlayEditState::Refused}, // malformed address
+            {R"(<set-layer tune="1" tune.was="0"/>)", OverlayEditState::Refused},            // no address
+            {R"(<set-zone zone="all" tune="1" tune.was="0"/>)", OverlayEditState::Refused},  // needs expansion
+            {R"(<set-zone zone="9" tune="1" tune.was="-3" mode="tape" mode.was="gated"/>)",
+             OverlayEditState::Refused},                                                     // all-or-nothing
+            {R"(<set-zone zone="99" tune="1" tune.was="0"/>)", OverlayEditState::Orphaned},
         };
         bool allAsExpected = true, allUnchanged = true;
         for (const Case& c : cases) {
@@ -246,13 +277,108 @@ int main() {
         }
         check("each is reported as expected (refused or orphaned)", allAsExpected);
         check("none of them changes the program", allUnchanged);
-        const OverlayParseResult all = parseOverlay(
-            R"(<NassauDigitalOverlay version="1"><set-zone zone="all" level="-3"/></NassauDigitalOverlay>)");
-        const OverlayResult r = applyOverlay(v4, all.overlay);
-        Program direct = v4;
-        setZones(direct, ZoneScope::everyZone(), {ParamEdit::absolute("level", "-3")});
-        check("zone=\"all\" reaches every zone of the base it is applied to", all.ok && r.program == direct &&
-                                                                               r.edits[0].state == OverlayEditState::Applied);
+    }
+
+    // --------------------------------------------------- record and undo ---
+    group("Previous values: record an edit, apply it, undo it: the program and render from before (cmp)");
+    {
+        Overlay o = op.overlay;
+        Program current = applyOverlay(v3, o).program;
+        const Program before = current;
+        const std::string textBefore = writeOverlay(o);
+        const Stereo r0 = play(current);
+        // A relative edit on zone 17, whose tune the overlay already set to -2.
+        const RecordedEdit rec = recordZoneEdit(o, current, ZoneScope::zones({17}),
+                                                {ParamEdit::by("tune", 2.0), ParamEdit::absolute("release", "0.2")});
+        const std::string verb = rec.ok && rec.count == 1 ? writeXml(o.edits.back()) : std::string();
+        note("recorded: " + verb.substr(0, verb.size() ? verb.size() - 1 : 0));
+        check("one set-zone, the relative +2 resolved to absolute values beside the replaced ones",
+              rec.ok && rec.count == 1 &&
+                  verb == "<set-zone zone=\"17\" tune=\"0\" tune.was=\"-2\" release=\"0.2\" release.was=\"0.05\"/>\n");
+        const OverlayResult applied = applyOverlay(v3, o);
+        note("applied: " + describe(applied));
+        check("applied to the base it was made on: what the edit made, nothing drifted",
+              applied.program == current && applied.drifted().empty() && applied.edits.size() == 4);
+        const Stereo r1 = play(applied.program);
+        note("RMS from key 40's note-on: before " + std::to_string(rms(r0.l, 9600, 48000)) + ", with the edit " +
+             std::to_string(rms(r1.l, 9600, 48000)));
+        check("...and it is audible", !same(r0, r1));
+        Overlay o2 = o;
+        Program c2 = current;
+        const RecordedEdit later = recordLayerEdit(o2, c2, {10}, {ParamEdit::absolute("level", "-1")});
+        check("an edit that is not the last one is not undone", later.ok && !undoRecordedEdit(o2, c2, rec));
+        const bool undone = undoRecordedEdit(o, current, rec);
+        check("the undo applies", undone);
+        check("undo: the overlay writes the same bytes as before the edit", writeOverlay(o) == textBefore);
+        check("undo: the program the editor holds equals the one before (the .was values written back)", current == before);
+        const OverlayResult again = applyOverlay(v3, o);
+        check("undo: base + overlay equals the program before (structural)", again.program == before);
+        check("undo: and renders byte-identical to before (cmp)", same(play(again.program), r0));
+    }
+
+    // ----------------------------------------------------------- drift ---
+    group("Previous values: base v5 changes zone 17's attack under the edit: applied, reported drifted");
+    {
+        const OverlayResult r = applyOverlay(v5, op.overlay);
+        note("edits on v5: " + describe(r));
+        const std::vector<size_t> d = r.drifted();
+        check("exactly edit #0 is reported drifted, attack only, was 0 (the default, the base wrote none) now 0.05",
+              d.size() == 1 && d[0] == 0 && r.edits[0].drift.size() == 1 &&
+                  r.edits[0].drift[0] == OverlayDrift{"attack", "0", "0.05"});
+        Program direct = v5;
+        editZone17(direct);
+        editLayer6(direct);
+        check("the overlay's attack plays: v5 + overlay equals v5 with the edits made directly (structural)",
+              r.program == direct && r.program.findZone(17)->attack == 0.25);
+        const Stereo a = play(r.program), b = play(direct), base5 = play(v5);
+        check("...and renders byte-identical to it (cmp)", same(a, b));
+        check("...which differs from v5 alone", !same(a, base5));
+        // The comparison is on the value as the format writes it, not on the text.
+        const OverlayParseResult same0 = parseOverlay(
+            R"(<NassauDigitalOverlay version="1"><set-zone zone="17" attack="0.25" attack.was="0.000"/>)"
+            R"(<set-zone zone="5" tune="2" tune.was="1.0e0"/></NassauDigitalOverlay>)");
+        const OverlayResult s0 = applyOverlay(v3, same0.overlay);
+        check("\"0.000\" and \"1.0e0\" match 0 and 1: no drift from spelling",
+              same0.ok && s0.drifted().empty() && s0.edits[0].state == OverlayEditState::Applied &&
+                  s0.edits[1].state == OverlayEditState::Applied);
+        const OverlayParseResult tiny = parseOverlay(
+            R"(<NassauDigitalOverlay version="1"><set-zone zone="5" tune="2" tune.was="1.0000000000000002"/></NassauDigitalOverlay>)");
+        const OverlayResult t0 = applyOverlay(v3, tiny.overlay);
+        check("a .was one ulp from the value is drift (exact, no tolerance)", tiny.ok && t0.drifted().size() == 1);
+    }
+
+    // ----------------------------------------------------- ALL expansion ---
+    group("Previous values: an ALL edit becomes one set-zone per zone, each with its own .was");
+    {
+        Overlay o;
+        Program current = v3;
+        const RecordedEdit rec = recordZoneEdit(o, current, ZoneScope::everyZone(), {ParamEdit::by("tune", 2.0)});
+        std::string verbs;
+        for (const XmlNode& v : o.edits) verbs += writeXml(v);
+        note("recorded:\n" + verbs);
+        check("three set-zones, zone 5: 1 -> 3, zone 9: -3 -> -1, zone 17: 0 -> 2",
+              rec.ok && rec.count == 3 &&
+                  verbs == "<set-zone zone=\"5\" tune=\"3\" tune.was=\"1\"/>\n"
+                           "<set-zone zone=\"9\" tune=\"-1\" tune.was=\"-3\"/>\n"
+                           "<set-zone zone=\"17\" tune=\"2\" tune.was=\"0\"/>\n");
+        Program direct = v3;
+        setZones(direct, ZoneScope::everyZone(), {ParamEdit::by("tune", 2.0)});
+        const OverlayResult r = applyOverlay(v3, o);
+        check("applied on v3: equals the ALL edit made directly, nothing drifted",
+              r.program == direct && current == direct && r.drifted().empty());
+        check("...and renders byte-identical to it (cmp)", same(play(r.program), play(direct)));
+        // A zone a later base adds is not covered.
+        Program v6 = v3;
+        Zone z20 = v3.zones[0];
+        z20.keyLo = z20.keyHi = z20.rootKey = 42;
+        z20.tune = 5.0;
+        const uint32_t id20 = addZone(v6, z20);
+        const OverlayResult r6 = applyOverlay(v6, o);
+        check("a zone a later base adds keeps its own tune (5), the three expanded edits apply",
+              r6.program.findZone(id20) && r6.program.findZone(id20)->tune == 5.0 && r6.drifted().empty() &&
+                  r6.orphaned().empty() && r6.program.findZone(9)->tune == -1.0);
+        const bool undone = undoRecordedEdit(o, current, rec);
+        check("undo of the ALL edit: empty overlay, v3 again", undone && o.edits.empty() && current == v3);
     }
 
     return summary("overlay_tests");

@@ -358,6 +358,21 @@ not change, because every sampler meets them:
 * If a new version of the base drops a zone you had edited, the edit is
   **kept and shown greyed out**, never silently dropped.
 * **Flatten** turns base + overlay into a program of your own.
+* **Every edit stores the value it replaces** **(decided 2026-10-27)**: beside
+  each new value, the expected previous one (`attack.was`), for checking the
+  edit against the base and for undo. Undo of an edit removes it and writes
+  those previous values back.
+* **A base that changed under an edit** **(decided 2026-10-27)**: when the
+  base's value is no longer the edit's `.was`, the edit is still applied (the
+  overlay's value plays) and reported as **drifted**, with what it expected
+  and what the base has now. The values are compared as they are written in
+  the format, so float noise does not count as a change.
+* **ALL is expanded when the edit is made** **(decided 2026-10-27)**: an edit
+  with ALL scope becomes one edit per zone that exists then, each with its own
+  previous value. A zone a later base adds is not covered by it.
+* **Relative input is resolved when the edit is made** **(decided
+  2026-10-27)**: `tune +2` is stored as its absolute new and previous values;
+  the typed relative form is never stored.
 
 This is what Kontakt, Logic's Sampler and SFZ do implicitly (edits live in the
 instance; the library is untouched; "save as" writes a new file that refers to
@@ -493,11 +508,15 @@ kept on load and written back. Proposal:
 </NassauDigitalProgram>
 ```
 
-An overlay (§8) is a list of the same verbs, applied to the base in order:
+An overlay (§8) is a list of the same verbs, applied to the base in order.
+Each changed parameter is written with the value it replaces, as one paired
+attribute `<name>.was` **(decided 2026-10-27)**; each verb names one zone or
+layer, since ALL is expanded when the edit is made:
 
 ```xml
 <NassauDigitalOverlay version="1" base="Library/Strings.ndp" baseVersion="3">
-  <set-zone zone="17" attack="0.25"/>
+  <set-zone zone="17" attack="0.25" attack.was="0.1"/>
+  <set-layer layer="18" tune="-1" tune.was="0"/>
 </NassauDigitalOverlay>
 ```
 

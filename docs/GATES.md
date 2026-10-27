@@ -263,21 +263,32 @@ DESIGN §5 (`tempo-loop`, `tempo-oneshot`, method `resample`).
 
 DESIGN §8.
 
-**DONE 2026-10-26.** `Tests/overlay_tests` 27/27, `Source/Core/nd_overlay.*`
-(the §12 overlay: `set-zone` and `set-layer` with absolute values, applied in
-order, each edit reported applied / orphaned / refused / unknown). C8.1: base
-v3 + an overlay editing zone 17 (attack, tune, level) and layer 6 equals the
-direct edits (structural) and renders byte-identical (cmp); the base alone
-differs (RMS 0.4320 vs 0.3674 from key 40's note-on); the base is unchanged.
-C8.2: on v4 without zone 17, exactly edit #0 is reported orphaned (id 17),
-the result equals v4 with only the layer-6 edit (structural and cmp), the
-overlay writes the same bytes, and v3 gets the kept edit back; a dropped layer
-orphans its `set-layer` alike. C8.3: the flattened program, written and read
-back, has no overlay element, no `base`/`baseVersion` and no library path,
-equals base + overlay and renders byte-identical (cmp). The overlay
-round-trips byte-identically with an unknown root attribute and verb.
-Watched failing: `set-zone` reaching every zone (C8.1, 2 checks), an orphan
-stopping the overlay (C8.2, 3), flatten dropping the overlay (C8.3, 2).
+**DONE 2026-10-26, previous values added 2026-10-27.** `Tests/overlay_tests`
+46/46, `Source/Core/nd_overlay.*` (the §12 overlay: one `set-zone` /
+`set-layer` per target, every value beside its `.was`, applied in order, each
+edit reported applied / drifted / orphaned / refused / unknown;
+`recordZoneEdit` / `recordLayerEdit` / `undoRecordedEdit` make and take back
+edits). C8.1: base v3 + an overlay editing zone 17 (attack, tune, level) and
+layer 6 equals the direct edits (structural) and renders byte-identical (cmp);
+the base alone differs (RMS 0.4322 vs 0.2153 from key 40's note-on); the base
+is unchanged. C8.2: on v4 without zone 17, exactly edit #0 is reported
+orphaned (id 17), the result equals v4 with only the layer-6 edit (structural
+and cmp), the overlay writes the same bytes, and v3 gets the kept edit back; a
+dropped layer orphans its `set-layer` alike. C8.3: the flattened program,
+written and read back, has no overlay element, no `base`/`baseVersion` and no
+library path, equals base + overlay and renders byte-identical (cmp).
+Previous values: `tune +2` recorded on zone 17 is stored as `tune="0"
+tune.was="-2"`; record → apply → undo gives the same overlay bytes, the same
+program and a byte-identical render (cmp). Base v5 (zone 17 attack 0.05)
+reports edit #0 drifted, attack was 0 (the default) now 0.05, and plays
+v5 with attack 0.25 (structural and cmp); "0.000" against 0 is no drift, one
+ulp is. ALL `tune +2` on zones at 1 / −3 / 0 becomes three verbs with `.was`
+1 / −3 / 0 and new 3 / −1 / 2, equal to the ALL edit made directly (cmp); a
+zone a later base adds keeps its value. A stored `zone="all"` and a stored
+`+n` are refused. Watched failing: `set-zone` reaching every zone (8 checks),
+an orphan stopping the overlay (3), flatten dropping the overlay (2), `.was`
+ignored (2), a drifted edit held back (2), one shared `.was` for ALL (3), undo
+not writing `.was` back (2), undo leaving the verbs (4).
 
 * **C8.1** Base v3 + an overlay that edits zone 17: what plays equals a
   program with the edit made directly (`cmp`).
