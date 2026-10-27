@@ -158,3 +158,13 @@ if(GIT_FOUND AND EXISTS "${NASSAU_DIGITAL_DIR}/.git")
                     OUTPUT_VARIABLE _nassau_digital_rev OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
 endif()
 message(STATUS "nassau-digital: ${_nassau_digital_how}, ${NASSAU_DIGITAL_DIR} at ${_nassau_digital_rev}")
+
+# A checkout from before this locator existed builds the core but names no
+# nassau::digital; a consumer linking it would fail at generate time, naming
+# neither this file nor the pin. Stop here instead, saying which.
+if(NOT TARGET nassau::digital)
+    message(FATAL_ERROR
+        "nassau-digital at ${NASSAU_DIGITAL_DIR} (${_nassau_digital_rev}) defines no "
+        "nassau::digital target: it predates cmake/bootstrap/NassauDigital.cmake. Move "
+        "that checkout, pin or NASSAU_DIGITAL_GIT_REF to a commit that has the locator.")
+endif()

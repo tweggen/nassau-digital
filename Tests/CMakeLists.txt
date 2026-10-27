@@ -97,6 +97,12 @@ nd_add_locator_test(sibling
 nd_add_locator_test(none_fetch_off
     "nassau-digital not found.*fetch off\\)\\..*git clone https://github.com/tweggen/nassau-digital.git [^ \n]*nowhere/nassau-digital\n.*configure exit 1"
     "-DARGS=-DND_TEST_GIT_REF=0000000000000000000000000000000000000000,-DNASSAU_DIGITAL_SIBLING_ROOT=${ND_LOC_WS}/nowhere/root,-DNASSAU_DIGITAL_ALLOW_FETCH=OFF")
+# A checkout from before the locator (no nassau::digital): stop, naming it,
+#    rather than let the consumer's link fail at generate time.
+nd_add_locator_test(predates
+    "defines[ \n]+no[ \n]+nassau::digital[ \n]+target:[ \n]+it[ \n]+predates.*configure exit 1"
+    "-DFAKE_OLD=${ND_LOC_WS}/old_checkout"
+    "-DARGS=-DND_TEST_GIT_REF=0000000000000000000000000000000000000000,-DNASSAU_DIGITAL_DIR=${ND_LOC_WS}/old_checkout")
 set_tests_properties(locator_explicit_empty locator_sibling PROPERTIES RESOURCE_LOCK nd_locator_fake_sibling)
 # The ref these tests never fetch is a placeholder; the locator refuses an
 # unset one, which is what a consumer forgetting its pin would hit.

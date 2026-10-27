@@ -2,7 +2,7 @@
 # its output, for one route of the locator (Tests/CMakeLists.txt).
 #
 #   cmake -DBUILD_DIR=<dir> -DLOCATOR=<file> -DCONSUMER=<dir> [-DARGS=a,b,...]
-#         [-DFAKE_SIBLING=<dir>] -P run_locator.cmake
+#         [-DFAKE_SIBLING=<dir>] [-DFAKE_OLD=<dir>] -P run_locator.cmake
 #
 # ARGS is comma-separated (a ; would split the add_test argument). With
 # FAKE_SIBLING, a stand-in checkout (the two files the locator tests for, and a
@@ -16,6 +16,13 @@ if(FAKE_SIBLING)
     file(WRITE "${FAKE_SIBLING}/Source/Core/nd_instrument.h" "// stand-in\n")
     file(WRITE "${FAKE_SIBLING}/CMakeLists.txt"
         "add_library(nd_fake_core INTERFACE)\nadd_library(nassau::digital ALIAS nd_fake_core)\n")
+endif()
+# FAKE_OLD: a stand-in for a checkout from BEFORE the locator, which passes the
+# usability test but defines no nassau::digital.
+if(FAKE_OLD)
+    file(REMOVE_RECURSE "${FAKE_OLD}")
+    file(WRITE "${FAKE_OLD}/Source/Core/nd_instrument.h" "// stand-in\n")
+    file(WRITE "${FAKE_OLD}/CMakeLists.txt" "add_library(nassau_digital_core INTERFACE)\n")
 endif()
 string(REPLACE "," ";" _args "${ARGS}")
 execute_process(
