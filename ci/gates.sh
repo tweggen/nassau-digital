@@ -10,8 +10,10 @@
 # passed in CI" mean the same thing. The logic lives here, not in the workflow,
 # so a move off GitHub rewrites the YAML that calls it, not the gate.
 #
-# The core needs nothing outside this checkout: no SDK, no submodules, no
-# credentials.
+# The core needs no SDK, no submodules and no credentials. It needs
+# nassau-dsp, which cmake/NassauDSP.cmake finds as -DNASSAU_DSP_DIR, a sibling
+# ../nassau-dsp, or (CI, a bare clone) a fetch of the pinned public commit;
+# the configure log says which ("nassau-dsp: ...").
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

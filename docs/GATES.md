@@ -29,8 +29,8 @@ in nassau-bloom `docs/GATES.md`) apply unchanged. In short:
 * **R1 — No gate regresses an earlier one.** The exit command is the full
   suite: `./ci/gates.sh` here, and qbx's `./ci/gates.sh` for a Q gate.
 * **R2 — The core stays framework-free**: standard headers and the
-  header-only `nassau-dsp` submodule only; no Qt, no IPlug2, no SDK;
-  allocation at prepare time only.
+  header-only `nassau-dsp` (found by its locator, never a submodule: DESIGN
+  §9.2) only; no Qt, no IPlug2, no SDK; allocation at prepare time only.
 * **R3 — No allocation, no locks, no I/O in `process()`.** A sample buffer is
   released on a worker, never on the audio thread (DESIGN §6).
 * **R4 — Append-only parameters and program attributes**; unknown attributes
@@ -214,6 +214,14 @@ depth 0.00 / 29.11 / 57.79 Hz; LFO → pan 2.000000 Hz; velocity 64/127 → leve
 velocity → cutoff 1011/2011/4000 Hz with +24 st (at the slot, until C5).
 Voice cost unchanged against C2.6 (35.8 ns stereo one layer, 130.1 ns four
 layers). Each AC watched failing under a sabotage.
+**Re-measured on audio at C5 (2026-10-27)**, now that the filter exists: a
+sine through lp24 at resonance 0, whose level gives the cutoff (four bilinear
+one-poles), with the amp envelope divided out through a DC channel. Filter
+envelope 40.514 / 120.776 / 150.061 ms (set 40/120/150), sustain 0.29998,
+each segment starting 0.78 / 0.89 ms after its event (the cutoff is set per
+32-frame block and ramped across the next). Velocity → cutoff on audio
+1010.8 / 2010.4 / 3997.5 Hz (documented 1011.0 / 2010.9 / 4000), within
+0.07 %. Watched failing: the stage handed the zone's static cutoff.
 
 * **C4.1** Amp ADSR + hold and the filter envelope each match their segment
   times ± 1 ms (measured on the envelope applied to DC).
@@ -224,6 +232,57 @@ layers). Each AC watched failing under a sabotage.
 ### C5 — Drive, filter, kit bus *(needs X1)*
 
 DESIGN §3.
+
+**DONE 2026-10-27.** `Tests/fx_tests` 33/33, `Source/Core/nd_drive.h`,
+`nd_oversampler.h`, `nd_voice_fx.h`, `nd_kit_bus.h`; nassau-dsp found by
+`cmake/NassauDSP.cmake` (verbatim) at pin 76e38fb. C5.1: a −12 dBFS RMS
+1 kHz sine, drive 0.25 / 0.5 / 0.75 / 1, every curve within ±0.003 dB of the
+input (filter out of the way, hp12 at 20 Hz; with the default lp24 at 20 kHz
+at drive 1: −0.06 / −0.06 / −0.08 / −0.54 dB for soft / tube / hard / fold).
+C5.2: the voice's stage over nassau-dsp's golden battery (its input, its
+cutoff sweep, resonance 0/50/100 %, in uneven chunks) is byte-identical to
+`Tests/fixtures/filter_golden.bin` for all 8 filter cases (ladder ×3, SVF ×3,
+HP 2 and 4 poles), 24000/24000 samples each, both channels; on audio each
+type's slope two octaves out matches the bilinear cascade within 0.01 dB
+(lp24 −49.94, lp12 −24.97, hp12 −24.63, hp24 −49.26 dB). C5.3, at the chosen
+**4×** with antiderivative antialiasing (soft, hard, fold; tube has none
+without a logarithm) and +20 dB input gain at drive 1: loudest line above
+fs/2 − 2 kHz at 44.1 kHz soft −145.1, tube −84.1, hard −114.4, fold −85.1 dB;
+at 48 kHz none exists (a 10 kHz tone's lines lie on a 2 kHz grid, the only
+one above 22 kHz is 24 kHz, which a symmetric curve cannot make: at 48 kHz the
+AC passes even without oversampling, so 44.1 kHz is the case that measures).
+2× fails at 44.1 kHz (−48.9 dB fold, antiderivative on); +24 dB fails at 4×
+(tube −77.7, fold −79.4). C5.4: a drive-0 voice is 1× and stays 1× when drive
+is automated to 1 (its 3rd harmonic's alias at 14.1 kHz rises from −172 to
+−24 dB), the next note is 4× (loudest alias −84.7 dB); the oversampler's
+delay (39 frames at 2×, 47 at 4×) is compensated, a click peaks on the same
+frame either way, a burst plays to its end. C5.5: two hits (1 kHz, 1.5 kHz)
+through busDrive 0.5 / 1 show 500 Hz at −18.3 / −13.7 dB and 2 kHz at
+−18.0 / −11.3 dB re the 1 kHz tone; each alone and summed −156.8 dB or below;
+busDrive 0 is an exact bypass. The bus switches its oversampling over 256
+frames (step 0.0071 against the tone's own 0.0061). R8: byte-identical after
+reset and at blocks 256/37 with drive and bus drive automated mid-render.
+R3: 0 allocations in 2 × 1500 blocks over every filter, both factors, drive
+automation, the bus on and off, stealing. Each watched failing: no
+compensation (+11.4 dB), the g ramp off by one sample (8 golden cases), the
+antiderivative off (fold −61.0), factor 2 (−48.9), a plain decimator
+(−72.2), oversampling re-decided on a drive change, drive not reaching a
+sounding voice, no latency compensation (peak 39/47 frames late), no tail
+(burst cut, −10 dB error), the bus not applied, a one-block bus switch (step
+0.0138), the bus ramping across the host's block (block sizes differ), a
+heap buffer in the stage (425154 allocations).
+
+**Per-voice cost against C2.6 — the budget is missed** (Release, Xeon E5-1650
+v3, load 3.6–4.2 on 12 cores from another job, best of 5, three runs):
+one layer, drive 0, lp24 static **67–69 ns** (≤ 40), cutoff moving 82–84;
+drive 0.5 at 2× 186–191, at 4× **319–326**, 4× with the cutoff moving
+377–396; four layers, drive 0 **167–172 ns** (≤ 140), drive 0.5 at 2×
+287–297, at 4× **419–429**. The sample reading C2.6 budgeted is unchanged
+(the filterless C2 harness measured 36.4 / 131.5 ns before this gate): the
+stereo lp24 ladder adds about 30 ns per frame at the base rate, and a 4×
+voice spends about 97 ns in the resampler, 60 in the soft curve with its
+antiderivative and 120 in the ladder at 4×. C2.6 left drive and filter "their
+own share" here; that share is the author's to set.
 
 * **C5.1** Each drive curve's output RMS at moderate input stays within ± 1 dB
   of the input (output compensation).

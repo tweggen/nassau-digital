@@ -102,8 +102,13 @@ int main() {
         z.layers = {layer(0, 70, 10), layer(60, 127, 10)};
         addZone(prog, z);
         install(inst, prog);
+        // Two tones close enough that the zone's filter (lp24 at 20 kHz, the
+        // default since there is no "off", gate C5) treats them alike: it is
+        // 0.10 % down at 1250 Hz against 0.02 % at 500, enough to fail the
+        // 1e-3 level comparisons below; at 600 Hz the difference is 0.01 %.
+        // Both are whole cycles in the 4800-frame Goertzel window.
         inst.setSample(prog.zones[0].layers[0].id, Sample::mono(kRate, sine(500.0, kRate, 0.5)));
-        inst.setSample(prog.zones[0].layers[1].id, Sample::mono(kRate, sine(1250.0, kRate, 0.5)));
+        inst.setSample(prog.zones[0].layers[1].id, Sample::mono(kRate, sine(600.0, kRate, 0.5)));
         double ref = 0, lo = 1e9, hi = -1e9;
         std::string table;
         for (int v = 50; v <= 80; ++v) {
@@ -125,9 +130,9 @@ int main() {
         check("summed RMS across the fade within +-0.5 dB", lo >= -0.5 && hi <= 0.5);
         inst.reset();
         const Stereo mid = render(inst, {on(0, 60, 65)}, at(0.2));
-        const double a500 = toneAmp(mid.l, at(0.05), at(0.15), 500.0), a1250 = toneAmp(mid.l, at(0.05), at(0.15), 1250.0);
-        note("velocity 65 (mid-fade): 500 Hz layer " + std::to_string(a500) + ", 1250 Hz layer " + std::to_string(a1250));
-        check("mid-fade both layers sound at equal level (cos = sin at the middle)", std::fabs(a500 / a1250 - 1.0) < 1e-3);
+        const double a500 = toneAmp(mid.l, at(0.05), at(0.15), 500.0), a600 = toneAmp(mid.l, at(0.05), at(0.15), 600.0);
+        note("velocity 65 (mid-fade): 500 Hz layer " + std::to_string(a500) + ", 600 Hz layer " + std::to_string(a600));
+        check("mid-fade both layers sound at equal level (cos = sin at the middle)", std::fabs(a500 / a600 - 1.0) < 1e-3);
 
         // Adjacent windows, fade 0: a hard switch between 64 and 65.
         Program p2;
@@ -136,13 +141,13 @@ int main() {
         addZone(p2, z2);
         install(inst, p2);
         inst.setSample(p2.zones[0].layers[0].id, Sample::mono(kRate, sine(500.0, kRate, 0.5)));
-        inst.setSample(p2.zones[0].layers[1].id, Sample::mono(kRate, sine(1250.0, kRate, 0.5)));
+        inst.setSample(p2.zones[0].layers[1].id, Sample::mono(kRate, sine(600.0, kRate, 0.5)));
         inst.reset();
         const Stereo s64 = render(inst, {on(0, 60, 64)}, at(0.2));
         inst.reset();
         const Stereo s65 = render(inst, {on(0, 60, 65)}, at(0.2));
-        const double a64 = toneAmp(s64.l, at(0.05), at(0.15), 500.0), b64 = toneAmp(s64.l, at(0.05), at(0.15), 1250.0);
-        const double a65 = toneAmp(s65.l, at(0.05), at(0.15), 500.0), b65 = toneAmp(s65.l, at(0.05), at(0.15), 1250.0);
+        const double a64 = toneAmp(s64.l, at(0.05), at(0.15), 500.0), b64 = toneAmp(s64.l, at(0.05), at(0.15), 600.0);
+        const double a65 = toneAmp(s65.l, at(0.05), at(0.15), 500.0), b65 = toneAmp(s65.l, at(0.05), at(0.15), 600.0);
         note("velFade 0: at 64 the layers measure " + std::to_string(a64) + " / " + std::to_string(b64) + ", at 65 " +
              std::to_string(a65) + " / " + std::to_string(b65));
         check("velFade 0 switches: 64 plays only the low layer, 65 only the high one, each at full level",

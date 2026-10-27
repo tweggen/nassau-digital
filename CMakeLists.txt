@@ -39,6 +39,20 @@ else()
     set(ND_WARNING_FLAGS -Wall -Wextra -Wpedantic)
 endif()
 
+# nassau-dsp (DESIGN §11, gate X1): the ladder, the SVF, the HP cascade and
+# the shapers the voice's filter and drive are built from (gate C5), a
+# header-only library shared with nassau-analogue. It is pinned ONCE for a
+# release, as a top-level nassau-suite submodule that passes NASSAU_DSP_DIR,
+# never as a submodule here (DESIGN §9.2). cmake/NassauDSP.cmake is a VERBATIM
+# copy of nassau-dsp's cmake/bootstrap/NassauDSP.cmake: it finds an explicit
+# NASSAU_DSP_DIR, then a sibling ../nassau-dsp, then fetches the ref below.
+# NASSAU_DSP_GIT_REF is what a bare clone (and CI) builds: a commit, never a
+# branch; move it in the same change that needs newer nassau-dsp code.
+# NASSAU_DSP_FLOAT stays off: the core's filters run in double, which is
+# what C5.2's byte comparison against nassau-dsp's golden assumes.
+set(NASSAU_DSP_GIT_REF "76e38fb3207092fbc3139a588b2726e9ad1405cd")
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/NassauDSP.cmake)
+
 # The core, plus the R2 header check that guards it (C0.2).
 add_subdirectory(Source/Core)
 

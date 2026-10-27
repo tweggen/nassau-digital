@@ -8,14 +8,16 @@
 #
 #   * <name>   and name is a C++17 standard library header (the list below), or
 #   * "name"   and name resolves to an existing file INSIDE CORE_DIR, relative
-#              to the including file's directory or to CORE_DIR itself.
+#              to the including file's directory or to CORE_DIR itself, or
+#   * "name"   and name is a header directly in DSP_INCLUDE_DIR, when that is
+#              passed: nassau-dsp's Source/DSP, the one further root R2 allows
+#              (DESIGN §11, gate C5). nassau-dsp checks its own headers against
+#              the same rule (its tools/check_headers.py).
 #
 # Everything else fails: a third-party <QString>, a C header such as
 # <math.h> (use <cmath>), a "../Plugin/x.h" that climbs out of the core, a
 # quoted name that resolves nowhere, and an `#include MACRO` (which no check
-# can see through). When the core takes nassau-dsp as a submodule (gate C5,
-# DESIGN §11) its include root is added here as the one further allowed root,
-# in the same change.
+# can see through).
 #
 # Written in CMake rather than a script language so it needs nothing a CMake
 # build does not already have, on Linux, macOS and Windows alike.
@@ -24,6 +26,12 @@ if(NOT CORE_DIR)
     message(FATAL_ERROR "CheckCoreHeaders: pass -DCORE_DIR=<dir>")
 endif()
 get_filename_component(CORE_DIR "${CORE_DIR}" ABSOLUTE)
+if(DSP_INCLUDE_DIR)
+    get_filename_component(DSP_INCLUDE_DIR "${DSP_INCLUDE_DIR}" ABSOLUTE)
+    if(NOT EXISTS "${DSP_INCLUDE_DIR}/synth_dsp.h")
+        message(FATAL_ERROR "CheckCoreHeaders: DSP_INCLUDE_DIR=${DSP_INCLUDE_DIR} holds no nassau-dsp headers")
+    endif()
+endif()
 if(NOT IS_DIRECTORY "${CORE_DIR}")
     message(FATAL_ERROR "CheckCoreHeaders: ${CORE_DIR} is not a directory")
 endif()
@@ -70,6 +78,10 @@ foreach(SRC IN LISTS SOURCES)
                     endif()
                 endif()
             endforeach()
+            if(NOT FOUND AND DSP_INCLUDE_DIR AND NOT NAME MATCHES "[/\\\\]"
+               AND EXISTS "${DSP_INCLUDE_DIR}/${NAME}" AND NOT IS_DIRECTORY "${DSP_INCLUDE_DIR}/${NAME}")
+                set(FOUND "${DSP_INCLUDE_DIR}/${NAME}")
+            endif()
             if(NOT FOUND)
                 list(APPEND VIOLATIONS "${SRC_REL}: \"${NAME}\" is not a file of the core")
             endif()
