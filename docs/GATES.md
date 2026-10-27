@@ -59,6 +59,19 @@ shared library, `nassau-dsp` (DESIGN §11); nassau-analogue then consumes them
 from there, through the locator and the single nassau-suite pin of DESIGN §9.2
 (never a nested submodule).
 
+**DONE 2026-10-27.** nassau-dsp#1 (merged `76e38fb`) and nassau-analogue#16
+(merged `08196ac`), pinned once in nassau-suite (#33). X1.1: nassau-analogue
+13/13 tests; G5 and G11 byte-identical to the renders from before the move
+(sha256 b4e52dd86e01b7a1… / 22afe6268730df0e…), also with `NASSAU_DSP_FLOAT`
+and `NASSAU_NO_SIMD` (whose float render differs from the double one, so the
+define reaches the moved headers); rechecked at the merged pin from a clean
+copy with no sibling checkout (the fetch route). X1.2: nassau-dsp's own CI
+green on ubuntu, macOS and Windows with no Qt, IPlug2 or SDK; slopes ladder
+−24.27, SVF −12.13, HP +11.95 / +23.90 dB/oct; both low-passes self-oscillate
+at 100 %; byte-level golden of 264000 values; the R2 header check watched
+failing on a planted `<vector>`; the golden watched failing on a changed
+ladder constant and on a 1 % change inside `shapeTriodeK`.
+
 * **X1.1** nassau-analogue's own suite passes unchanged, and its golden renders
   are byte-identical before and after the move.
 * **X1.2** nassau-dsp builds and runs its own tests with no Qt, no IPlug2 and
