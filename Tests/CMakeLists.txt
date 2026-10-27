@@ -26,6 +26,14 @@ nd_add_test(layers_tests)
 # ---- C4: envelopes and modulation ----------------------------------------------
 nd_add_test(mod_tests)
 
+# ---- C5: drive, filter, kit bus ---------------------------------------------------
+# C5.2 compares the voice's filters byte for byte with nassau-dsp's own golden
+# (Tests/fixtures/filter_golden.bin there), found through NASSAU_DSP_DIR in
+# every route the locator takes (explicit, sibling or fetched).
+nd_add_test(fx_tests)
+target_compile_definitions(fx_tests PRIVATE
+    ND_DSP_FILTER_GOLDEN="${NASSAU_DSP_DIR}/Tests/fixtures/filter_golden.bin")
+
 # ---- C8: libraries, base and overlay -----------------------------------------------
 nd_add_test(overlay_tests)
 # ---- C7: tempo modes by resampling ------------------------------------------------
@@ -42,7 +50,8 @@ set(ND_HC_SCRIPT ${PROJECT_SOURCE_DIR}/cmake/CheckCoreHeaders.cmake)
 set(ND_HC_FIXTURES ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/header_check)
 
 add_test(NAME header_check_core
-    COMMAND ${CMAKE_COMMAND} -DCORE_DIR=${PROJECT_SOURCE_DIR}/Source/Core -P ${ND_HC_SCRIPT})
+    COMMAND ${CMAKE_COMMAND} -DCORE_DIR=${PROJECT_SOURCE_DIR}/Source/Core
+            -DDSP_INCLUDE_DIR=${NASSAU_DSP_DIR}/Source/DSP -P ${ND_HC_SCRIPT})
 set_tests_properties(header_check_core PROPERTIES
     PASS_REGULAR_EXPRESSION "R2 header check: [0-9]+ include\\(s\\).*all allowed")
 

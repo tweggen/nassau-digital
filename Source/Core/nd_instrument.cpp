@@ -6,7 +6,11 @@
 #include <vector>
 
 #include "nd_envelope.h"
+#include "nd_kit_bus.h"
 #include "nd_voice_fx.h"
+
+static_assert(nd::Instrument::kControlBlock == nassau::kControlBlock,
+              "the voice's control grid is nassau-dsp's control block (DESIGN §11)");
 
 namespace nd {
 
@@ -88,6 +92,7 @@ struct ProgramRt {
     int polyphony = kDefaultPolyphony;
     double outputGain = 1.0;
     double masterTune = 0.0;
+    double busDrive = 0.0;
 };
 
 std::unique_ptr<ProgramRt> compile(const Program& p) {
@@ -95,6 +100,7 @@ std::unique_ptr<ProgramRt> compile(const Program& p) {
     rt->polyphony = isValidPolyphony(p.polyphony) ? p.polyphony : kDefaultPolyphony;
     rt->outputGain = dbToGain(p.outputLevel);
     rt->masterTune = p.masterTune;
+    rt->busDrive = p.busDrive;
     for (const Zone& z : p.zones) {
         ZoneRt r;
         r.id = z.id;
@@ -180,10 +186,12 @@ struct Voice {
     double keyOffset = 0.0;  // semitones from the root (0 with key tracking off)
     double lfoPhase = 0.0;   // cycles, from note-on
     int ctrlLeft = 0;
+    bool layersDone = false;    // every layer has ended; the stage's tail is still sounding
+    int64_t tailAge = 0;        // samples since the layers ended
     float panL = 1.0f, panR = 1.0f;
     int64_t age = 0;            // samples since note-on
     double velocity01 = 0.0;
-    VoiceFx fx;                 // the drive -> filter slot (C5)
+    VoiceFx fx;                 // the drive -> filter stage (nd_voice_fx.h)
     VoiceFxParams fxParams;     // this control block's, modulation applied
     bool fading = false;
     int64_t fadeLeft = 0, fadeTotal = 1;  // fade gain = fadeLeft / fadeTotal, exactly 0 at the end
@@ -312,6 +320,9 @@ struct Instrument::Impl {
     int modWheel = 0;
     double tempo = Instrument::kDefaultTempo;  // the song tempo, BPM (DESIGN §5)
     int64_t cutFadeSamples = 240;
+    int64_t maxTailSamples = 48000;
+    VoiceFxShared fx;  // the drive tables and oversampler taps every voice reads
+    KitBus bus;
     ModulationTap tap = nullptr;
     void* tapUser = nullptr;
 
@@ -533,7 +544,7 @@ struct Instrument::Impl {
         const double v01 = static_cast<double>(vel) / 127.0;
         // velocity -> level: full level at 127, (1 - velToLevel) at 0, linear.
         const double velGain = 1.0 - z.velToLevel * (1.0 - v01);
-        const double voiceGain = velGain * dbToGain(z.level) * rt->outputGain;
+        const double voiceGain = velGain * dbToGain(z.level);
         for (int n = 0; n < numPicked; ++n) {
             const LayerRt& lr = z.layers[picked[n]];
             std::shared_ptr<const Sample>* ref = nullptr;
@@ -597,8 +608,27 @@ struct Instrument::Impl {
         v.fxParams.drive = z.drive;
         v.fxParams.driveMix = z.driveMix;
         v.fxParams.cutoffHz = z.cutoff;
-        v.fx.start(v.fxParams, sampleRate);
+        // The oversampling decision, from the drive at note-on, for the voice's
+        // whole life (DESIGN §3).
+        v.fx.start(v.fxParams, fx);
         v.ctrlLeft = 0;
+        // An oversampled stage delays by latency() frames. Run the front (the
+        // layers and the stage) that many frames ahead now, discarding what
+        // comes out (the stage's history of silence before the note), so the
+        // note's first frame leaves the stage at the voice's first frame.
+        if (const int d = v.fx.latency(); d > 0) {
+            float bl[kControlBlock], br[kControlBlock];
+            for (int left = d; left > 0;) {
+                if (v.ctrlLeft == 0) {
+                    control(v);
+                    v.ctrlLeft = kControlBlock;
+                }
+                const int k = std::min(left, v.ctrlLeft);
+                front(v, bl, br, k);
+                v.ctrlLeft -= k;
+                left -= k;
+            }
+        }
         order[static_cast<size_t>(numOrder++)] = slot;
     }
 
@@ -643,6 +673,7 @@ struct Instrument::Impl {
                                 z.lfoToCutoff * lfo * depth + z.modWheelToCutoff * w +
                                 z.filterKeyTrack * static_cast<double>(v.key - z.rootKey);
         v.fxParams.cutoffHz = clampd(z.cutoff * std::exp2(cutSemis / 12.0), 20.0, 20000.0);
+        v.fx.control(v.fxParams);
         if (tap) {
             ModulationFrame f;
             f.zoneId = z.id;
@@ -655,11 +686,27 @@ struct Instrument::Impl {
             f.pitch = semis;
             f.pan = pan;
             f.cutoffHz = v.fxParams.cutoffHz;
+            f.drive = v.fxParams.drive;
+            f.oversampling = v.fx.factor();
             tap(tapUser, f);
         }
     }
 
     double rt_masterTune(const Voice&) const { return rt ? rt->masterTune : 0.0; }
+
+    // The front of a voice: k frames of its layers, summed, through the drive
+    // -> filter stage, into bl/br (overwritten). k <= what is left of the
+    // control block.
+    void front(Voice& v, float* bl, float* br, int k) {
+        for (int s = 0; s < k; ++s) bl[s] = br[s] = 0.0f;
+        for (int j = 0; j < v.numLayers; ++j) {
+            VoiceLayer& L = v.layers[j];
+            if (!L.active) continue;
+            if (interp == Interpolator::Sinc) renderLayer<Interpolator::Sinc>(L, sinc, bl, br, k);
+            else renderLayer<Interpolator::Hermite4>(L, sinc, bl, br, k);
+        }
+        v.fx.process(bl, br, k);
+    }
 
     // Renders one voice, adding into out. Returns false when the voice ended.
     bool render(Voice& v, float* outL, float* outR, int n) {
@@ -670,15 +717,10 @@ struct Instrument::Impl {
                 v.ctrlLeft = kControlBlock;
             }
             const int k = std::min(n - done, v.ctrlLeft);
-            float bl[kControlBlock] = {};
-            float br[kControlBlock] = {};
-            for (int j = 0; j < v.numLayers; ++j) {
-                VoiceLayer& L = v.layers[j];
-                if (!L.active) continue;
-                if (interp == Interpolator::Sinc) renderLayer<Interpolator::Sinc>(L, sinc, bl, br, k);
-                else renderLayer<Interpolator::Hermite4>(L, sinc, bl, br, k);
-            }
-            v.fx.process(v.fxParams, bl, br, k);  // drive -> filter (gate C5), in place
+            float bl[kControlBlock];
+            float br[kControlBlock];
+            front(v, bl, br, k);
+            float tailPeak = 0.0f;
             for (int s = 0; s < k; ++s) {
                 float g = static_cast<float>(v.amp.next());
                 v.filt.next();
@@ -688,16 +730,29 @@ struct Instrument::Impl {
                 }
                 outL[done + s] += bl[s] * g * v.panL;
                 outR[done + s] += br[s] * g * v.panR;
+                tailPeak = std::max(tailPeak, std::max(std::fabs(bl[s]), std::fabs(br[s])));
             }
             done += k;
             v.ctrlLeft -= k;
             v.age += k;
 
-            bool anyLayer = false;
-            for (int j = 0; j < v.numLayers; ++j) anyLayer = anyLayer || v.layers[j].active;
             const bool ampDone = v.amp.idle() ||
                                  (v.amp.stage() == Envelope::Stage::Sustain && v.amp.value() <= 0.0);
-            if (!anyLayer || ampDone || (v.fading && v.fadeLeft == 0)) return false;
+            if (ampDone || (v.fading && v.fadeLeft == 0)) return false;
+            // When every layer has ended, the stage still holds a tail: the
+            // oversampler's delay and the filter's ringing. The voice ends once
+            // the delay has passed and a whole chunk of the tail is below
+            // kTailFloor; a tail that will not die (a self-oscillating filter
+            // on a one-shot zone) is faded out after kMaxTailSeconds.
+            if (!v.layersDone) {
+                bool anyLayer = false;
+                for (int j = 0; j < v.numLayers; ++j) anyLayer = anyLayer || v.layers[j].active;
+                if (!anyLayer) v.layersDone = true;
+            } else {
+                v.tailAge += k;
+                if (v.tailAge >= v.fx.latency() && tailPeak <= kTailFloor) return false;
+                if (v.tailAge >= maxTailSamples) startFade(v);
+            }
         }
         return true;
     }
@@ -710,6 +765,9 @@ void Instrument::prepare(double sampleRate) {
     Impl& m = *impl_;
     m.sampleRate = sampleRate > 0.0 ? sampleRate : 48000.0;
     m.cutFadeSamples = std::max<int64_t>(1, static_cast<int64_t>(std::llround(kCutFadeSeconds * m.sampleRate)));
+    m.maxTailSamples = static_cast<int64_t>(std::llround(kMaxTailSeconds * m.sampleRate));
+    m.fx.build(m.sampleRate);
+    m.bus.prepare(&m.fx);
     if (!m.sinc.built()) m.sinc.build();
     m.voices.assign(static_cast<size_t>(kSlots), Voice{});
     m.order.assign(static_cast<size_t>(kSlots), 0);
@@ -728,6 +786,20 @@ void Instrument::setProgram(std::shared_ptr<const Program> program) {
     const int oldPoly = m.rt ? m.rt->polyphony : kDefaultPolyphony;
     m.rt = std::move(rt);
     m.program = std::move(program);
+    // Drive follows a sounding voice (DESIGN §3: automating drive changes the
+    // sound of the note, and never its oversampling, decided at note-on).
+    // Every other zone parameter stays as the voice started with it.
+    if (m.rt) {
+        for (int i = 0; i < m.numOrder; ++i) {
+            Voice& v = m.voices[static_cast<size_t>(m.order[static_cast<size_t>(i)])];
+            for (const ZoneRt& z : m.rt->zones) {
+                if (z.id != v.zone.id) continue;
+                v.zone.drive = z.drive;
+                v.fxParams.drive = z.drive;
+                break;
+            }
+        }
+    }
     // A smaller pool ends the voices beyond it at once (a state change).
     const int poly = m.rt ? m.rt->polyphony : kDefaultPolyphony;
     if (poly < oldPoly && !m.voices.empty()) {
@@ -773,6 +845,7 @@ void Instrument::reset() {
     m.numOrder = 0;
     m.nextSeq = 1;
     m.modWheel = 0;
+    m.bus.reset();
     m.startPage();
 }
 
@@ -820,9 +893,32 @@ void Instrument::process(int64_t timelineFrame, const Event* events, int numEven
         }
         pos = until;
     }
+    // The kit bus, after the sum of every voice (DESIGN §3), then the output
+    // level.
+    if (m.rt) {
+        m.bus.setDrive(m.rt->busDrive);
+        m.bus.process(outL, outR, n);
+        if (m.rt->outputGain != 1.0) {
+            const float g = static_cast<float>(m.rt->outputGain);
+            for (int i = 0; i < n; ++i) {
+                outL[i] *= g;
+                outR[i] *= g;
+            }
+        }
+    }
 }
 
 int Instrument::activeVoices() const { return impl_->numOrder; }
+
+void Instrument::setOversampling(int factor) {
+    if (factor == 2 || factor == 4) impl_->fx.factor = factor;
+}
+
+int Instrument::oversampling() const { return impl_->fx.factor; }
+
+int Instrument::oversamplingLatency() const { return impl_->fx.latency(); }
+
+bool Instrument::kitBusOversampling() const { return impl_->bus.engaged(); }
 
 void Instrument::setModulationTap(ModulationTap tap, void* user) {
     impl_->tap = tap;
