@@ -122,7 +122,7 @@ namespace {
 const char* const kModeNames[] = {"oneshot", "gated", "loop", "tempo-loop", "tempo-oneshot"};
 const char* const kTempoMethodNames[] = {"stretch", "resample"};
 const char* const kDriveCurveNames[] = {"soft", "tube", "hard", "fold"};
-const char* const kFilterNames[] = {"lp24", "lp12", "hp12", "hp24"};
+const char* const kFilterNames[] = {"lp24", "lp12", "hp12", "hp24", "off"};  // append-only (R4)
 const char* const kOutputNames[] = {"main", "aux1", "aux2", "aux3", "aux4", "aux5", "aux6", "aux7", "aux8"};
 
 const std::string& noText(const void*) {

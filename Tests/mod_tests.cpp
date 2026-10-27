@@ -254,6 +254,7 @@ int main() {
         inst.prepare(kRate);
         Program prog;
         Zone z = dcZone(PlayMode::Loop);
+        z.filter = FilterType::Lp24;  // stated: the default is off (DESIGN §3)
         z.cutoff = 250.0;
         z.filterEnvAmount = 48.0;
         z.filterAttack = 0.040;
@@ -490,6 +491,7 @@ int main() {
         inst.prepare(kRate);
         Program prog;
         Zone z = dcZone(PlayMode::Loop);
+        z.filter = FilterType::Lp24;  // stated: the default is off (DESIGN §3)
         z.cutoff = 1000.0;
         z.velToCutoff = 24.0;
         const double amp = 0.5;

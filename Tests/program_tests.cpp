@@ -189,6 +189,56 @@ int main() {
               !(q == p) && !(r2 == p) && !(r3 == p));
     }
 
+    // ------------------------------------------------------------ filter off ---
+    group("filter off (DESIGN §3, decided 2026-10-27): an appended enum value, and the default");
+    {
+        // Append-only (R4): the four filters keep their numbers, off is the fifth.
+        check("FilterType numbers: lp24 0, lp12 1, hp12 2, hp24 3, off 4",
+              static_cast<int>(FilterType::Lp24) == 0 && static_cast<int>(FilterType::Lp12) == 1 &&
+                  static_cast<int>(FilterType::Hp12) == 2 && static_cast<int>(FilterType::Hp24) == 3 &&
+                  static_cast<int>(FilterType::Off) == 4);
+        const ZoneParam* fp = nullptr;
+        for (const auto& d : zoneParams())
+            if (std::string(d.name) == "filter") fp = &d;
+        std::string spelled;
+        if (fp) {
+            for (int i = 0; i < fp->numEnumNames; ++i) spelled += std::string(i ? " " : "") + fp->enumNames[i];
+        }
+        note("filter values in the table, by number: " + spelled);
+        check("the table spells them lp24 lp12 hp12 hp24 off, in that order", spelled == "lp24 lp12 hp12 hp24 off");
+        check("a default Zone's filter is off", Zone{}.filter == FilterType::Off);
+
+        const auto noAttr = parseProgram("<NassauDigitalProgram version=\"1\"><zone id=\"1\"/></NassauDigitalProgram>");
+        check("a zone with no filter attribute reads as off",
+              noAttr.ok && noAttr.program.zones.size() == 1 && noAttr.program.zones[0].filter == FilterType::Off);
+        const auto offAttr =
+            parseProgram("<NassauDigitalProgram version=\"1\"><zone id=\"1\" filter=\"off\"/></NassauDigitalProgram>");
+        check("filter=\"off\" reads as off", offAttr.ok && offAttr.program.zones[0].filter == FilterType::Off);
+        const auto lpAttr =
+            parseProgram("<NassauDigitalProgram version=\"1\"><zone id=\"1\" filter=\"lp24\"/></NassauDigitalProgram>");
+        check("a program that names lp24 keeps it", lpAttr.ok && lpAttr.program.zones[0].filter == FilterType::Lp24);
+        const auto bad =
+            parseProgram("<NassauDigitalProgram version=\"1\"><zone id=\"1\" filter=\"none\"/></NassauDigitalProgram>");
+        check("an unknown filter name is refused (\"none\")", !bad.ok);
+
+        // The writer writes every attribute, defaults included (C1), so off
+        // is written out as filter="off", and reads back as off.
+        const std::string written = writeProgram(noAttr.program);
+        note("written: " + written.substr(0, std::min<size_t>(written.size(), 160)) + "...");
+        check("written as filter=\"off\"", written.find(" filter=\"off\"") != std::string::npos);
+        const auto back = parseProgram(written);
+        check("...and read back as off, the same program", back.ok && back.program == noAttr.program &&
+                                                               back.program.zones[0].filter == FilterType::Off);
+
+        // An edit can choose it and leave it, like any enum value.
+        Program q = lpAttr.program;
+        const auto toOff = setZones(q, ZoneScope::everyZone(), {ParamEdit::absolute("filter", "off")});
+        const bool wasOff = q.zones[0].filter == FilterType::Off;
+        const auto toLp = setZones(q, ZoneScope::everyZone(), {ParamEdit::absolute("filter", "lp24")});
+        check("an absolute edit sets filter off and back to lp24",
+              toOff.ok && wasOff && toLp.ok && q.zones[0].filter == FilterType::Lp24);
+    }
+
     // ---------------------------------------------------------------- C1.2 ---
     group("C1.2 unknown attributes and elements survive the round trip");
     {

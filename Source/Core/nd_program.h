@@ -51,7 +51,9 @@ struct Extras {
 enum class PlayMode : int { OneShot = 0, Gated, Loop, TempoLoop, TempoOneShot };
 enum class TempoMethod : int { Stretch = 0, Resample };
 enum class DriveCurve : int { Soft = 0, Tube, Hard, Fold };
-enum class FilterType : int { Lp24 = 0, Lp12, Hp12, Hp24 };
+// Append-only (R4): Off was added after the four filters (DESIGN §3, decided
+// 2026-10-27), so the existing values keep their numbers.
+enum class FilterType : int { Lp24 = 0, Lp12, Hp12, Hp24, Off };
 
 /// Output of a zone: 0 = main, 1..8 = aux 1..8 (DESIGN §3.1).
 constexpr int kNumAuxOutputs = 8;
@@ -94,8 +96,9 @@ struct Zone {
     double drive = 0.0;
     DriveCurve driveCurve = DriveCurve::Soft;
     double driveMix = 1.0;
-    // Filter (DESIGN §4.2), applied from gate C5.
-    FilterType filter = FilterType::Lp24;
+    // Filter (DESIGN §4.2), applied from gate C5. Off (a true bypass) is the
+    // default: a zone plays its sample as it is until a filter is chosen.
+    FilterType filter = FilterType::Off;
     double cutoff = 20000.0;
     double resonance = 0.0;
     double filterKeyTrack = 0.0;   ///< 0..1: fraction of the key's distance from rootKey added to cutoff
