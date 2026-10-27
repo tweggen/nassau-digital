@@ -26,6 +26,9 @@ nd_add_test(layers_tests)
 # ---- C4: envelopes and modulation ----------------------------------------------
 nd_add_test(mod_tests)
 
+# ---- C7: tempo modes by resampling ------------------------------------------------
+nd_add_test(tempo_tests)
+
 # ---- C0.2: the R2 header check, on the real core and on fixtures ------------
 # The build already runs the check on Source/Core (Source/Core/CMakeLists.txt);
 # this repeats it as a test so a ctest run reports it by name, and proves the

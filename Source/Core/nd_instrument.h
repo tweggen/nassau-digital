@@ -33,6 +33,9 @@
 // nd_voice_fx.h) before the amp, with the block's modulated cutoff; today the
 // stage passes the block through unchanged.
 //
+// Tempo (DESIGN §5). A resample tempo mode is one more factor in the read
+// rate, songTempo / layerTempo, applied per control block (setTempo()).
+//
 // Modulation (DESIGN §4.4), the fixed routes, each documented with its
 // direction (v = velocity / 127, w = mod wheel / 127, depth = 1 - m + m*w
 // with m = modWheelToLfoDepth, lfo = a sine at lfoRate from phase 0 at
@@ -64,7 +67,7 @@ struct ModulationFrame {
     double filterEnv = 0.0;   ///< 0..1
     double lfo = 0.0;         ///< -1..1, before depth
     double lfoDepth = 1.0;    ///< the mod wheel's scaling of the LFO routes, 0..1
-    double pitch = 0.0;       ///< semitones from the sample's recorded pitch, all routes applied
+    double pitch = 0.0;       ///< semitones from the sample's recorded pitch, all routes applied (not a resample tempo mode's ratio, which is per layer)
     double pan = 0.0;         ///< the zone pan stage's position, -1..1
     double cutoffHz = 0.0;    ///< what the drive -> filter stage is handed
 };
@@ -92,6 +95,8 @@ public:
     static constexpr double kCutFadeSeconds = 0.005;
     /// Previous round-robin choices remembered per key within a page.
     static constexpr int kRrMemoryPerKey = 16;
+    /// The song tempo until the host sets one, in beats per minute.
+    static constexpr double kDefaultTempo = 120.0;
 
     Instrument();
     ~Instrument();
@@ -129,6 +134,21 @@ public:
     /// Renders n frames (overwriting outL/outR). `timelineFrame` is the
     /// project position of the block's first frame. Audio thread.
     void process(int64_t timelineFrame, const Event* events, int numEvents, float* outL, float* outR, int n);
+
+    /// The song tempo, in beats per minute, that the tempo modes follow
+    /// (DESIGN §5). A `tempo-loop` or `tempo-oneshot` zone whose method is
+    /// `resample` plays each layer with `beats` > 0 at songTempo / layerTempo
+    /// times its own rate, where layerTempo = beats * 60 / (the layer's
+    /// played length [start, end) in seconds at the sample's rate): the loop
+    /// period follows the tempo and the pitch moves by 12 * log2 of that
+    /// ratio. Sounding voices follow a change too, from their next control
+    /// block, by changing their read rate and never their read position, so
+    /// a change makes no step. A non-finite or non-positive tempo is ignored.
+    /// Allocation-free; call it between process() calls (the host's tempo at
+    /// the block's start). Unaffected: the `stretch` method (the host hands a
+    /// buffer already rendered to the tempo) and layers with beats = 0.
+    void setTempo(double bpm);
+    double tempo() const;
 
     /// Voices sounding (including ones fading out after a steal).
     int activeVoices() const;
