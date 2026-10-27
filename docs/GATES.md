@@ -412,8 +412,8 @@ DESIGN §9.1, §9.2.
 DESIGN §9.2, §9.3.
 
 * **Q1.1** `objects/sampler` wraps the core's program; `add-zone`, `set-zone`,
-  `set-layer` and `select-zones` are actions addressed by `trackPath` + `slot`
-  + zone id, each undone exactly by one undo (asserted on the program).
+  `set-layer` and `select-zones` are actions addressed by `trackPath` +
+  `slotIndex` + zone id, each undone exactly by one undo (asserted on the program).
 * **Q1.2** The program is saved in the project and reloads identically
   (structural equality); a program element written by a newer version keeps
   its unknown attributes.
