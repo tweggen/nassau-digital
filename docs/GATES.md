@@ -297,6 +297,39 @@ voice spends about 97 ns in the resampler, 60 in the soft curve with its
 antiderivative and 120 in the ladder at 4×. C2.6 left drive and filter "their
 own share" here; that share is the author's to set.
 
+**Filter `off`, 2026-10-27** (DESIGN §3, §4.2: the author's decision). `off`
+is appended to the filter type (number 4, spelled `off`; lp24 / lp12 / hp12 /
+hp24 keep 0–3) and is the default: a zone with no `filter` attribute reads as
+`off`. The writer writes every attribute, defaults included (C1), so `off` is
+written as `filter="off"`; programs saved before this always wrote their
+filter and keep it. `off` is a true bypass: no filter code runs, and with no
+drive and no oversampling the stage returns at once. Gated
+(`Tests/fx_tests` 37/37, `Tests/program_tests` 76/76): a mono noise sample
+on its root key, hard left, read by the Hermite (an identity at ratio 1),
+renders **byte-identical to the sample** (cmp) with no filter attribute and
+with `off` (max |render − sample| 0; lp24 at 20 kHz 1.32 on the same
+full-band noise); an oversampled voice (drive 1 at note-on, driveMix 0) with
+`off` is byte-identical to the oversampler's round trip down(up(x)). Watched
+failing: the default back to lp24 (5 program checks and the default render),
+`off` missing from the names (13 program checks), `off` run as a wide-open
+lp24 at 20 kHz (the oversampled check; with the 1× shortcut removed too, all
+three byte checks). The 1× shortcut alone is cost, not sound: removing it
+changes no byte (the round trip through double is exact) and is not gated.
+Every C5 number above was measured with lp24 at 20 kHz, then the default: the
+C5 fixtures now state `filter="lp24"` and reproduce them unchanged. Tests
+that never meant a filter now run without one, which brings back the C2–C4
+numbers recorded before C5 (interpolator SNR, C3.5's 0.353504, velocity →
+start 12600 / 6300 / 0) and moves C6's recorded aux 3 RMS 0.199654 to
+0.199933 and its cross-output intermodulation −286.3 to −286.0 dB (C6's
+main-only sha256 is of the old default). Cost, one layer drive 0 `off` 37.4
+ns, four layers 136.8 (lp24 68.6 / 164.9 in the same run; C2's filterless
+36.4 / 131.5; Release, load 14–19 on 12 cores, best of 3 runs).
+**C5.3 with the filter off misses** at 44.1 kHz (the AC was defined and
+passed with lp24 at 20 kHz in the path): soft −133.9, tube **−73.0**, hard
+−103.6, fold **−76.0** dB, lines at 21.3 / 20.8 kHz that lp24 at 20 kHz had
+attenuated (48 kHz: none). Shown by `fx_tests` as a note, not a check. Open
+for the author.
+
 * **C5.1** Each drive curve's output RMS at moderate input stays within ± 1 dB
   of the input (output compensation).
 * **C5.2** The ladder and SVF match nassau-analogue's goldens for the same

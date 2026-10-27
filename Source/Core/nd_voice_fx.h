@@ -23,8 +23,15 @@
 //   lp12  SvfFilter      12 dB/oct TPT state-variable, low-pass output
 //   hp12  HpfCascade     2 one-pole high-passes (no resonance)
 //   hp24  HpfCascade     4 one-pole high-passes (no resonance)
-// resonance 0..1 is nassau-dsp's 0..100 %. There is no "off": the default
-// zone is lp24 at 20 kHz (the program model's default since C1).
+//   off   none           a true bypass, and the default (DESIGN §3, decided
+//                        2026-10-27): no filter code runs and its state is
+//                        never touched. The stage hands on what the drive
+//                        made (through the oversampler's round trip if the
+//                        voice is oversampled); at 1x with no drive it
+//                        returns at once and the layers' sum passes bit for
+//                        bit.
+// resonance 0..1 is nassau-dsp's 0..100 %. (C5 had no "off" and made lp24 at
+// 20 kHz the default, which coloured every voice.)
 //
 // Oversampling (DESIGN §3). start() decides it from the zone's drive at
 // note-on: above zero, the drive and the filter run at `factor` times the
@@ -53,7 +60,7 @@ namespace nd {
 
 /// One control block's settings for the stage, modulation applied.
 struct VoiceFxParams {
-    FilterType filter = FilterType::Lp24;
+    FilterType filter = FilterType::Off;
     double cutoffHz = 20000.0;  ///< after key tracking, velocity, filter envelope, LFO and mod wheel
     double resonance = 0.0;
     DriveCurve driveCurve = DriveCurve::Soft;
@@ -132,6 +139,8 @@ public:
                 hpf_[1].setControlRate(p.cutoffHz, fs_);
                 gTarget = static_cast<double>(hpf_[0].g);
                 break;
+            case FilterType::Off:
+                break;  // no coefficients: nothing reads them
         }
         if (first_) gStart = gTarget;
         gStart_ = gStart;
@@ -150,6 +159,13 @@ public:
     /// not per sample.
     void process(float* left, float* right, int n) {
         const int m = n * factor_;  // samples at the stage's rate
+        // Filter off, no oversampling, no drive: the stage has nothing to do
+        // and leaves the buffers alone (the round trip through double below
+        // would be exact too, but costs time).
+        if (type_ == FilterType::Off && factor_ == 1 && drivePrev_.wet <= 0.0 && driveNow_.wet <= 0.0) {
+            pos_ += m;
+            return;
+        }
         double bl[kBlock * Resampler::kMaxFactor], br[kBlock * Resampler::kMaxFactor];
         if (factor_ == 1) {
             for (int s = 0; s < n; ++s) {
@@ -176,6 +192,8 @@ public:
             case FilterType::Hp24:
                 filterLoop(hpf_, bl, br, m, [](HpfCascade& f, nassau_real x) { return f.process(x, 4); });
                 break;
+            case FilterType::Off:
+                break;  // a true bypass: the drive's output (or the input) as it is
         }
         if (factor_ == 1) {
             for (int s = 0; s < n; ++s) {
@@ -251,7 +269,7 @@ private:
     const VoiceFxShared* sh_ = nullptr;
     int factor_ = 1;
     double fs_ = 48000.0;
-    FilterType type_ = FilterType::Lp24;
+    FilterType type_ = FilterType::Off;
     DriveCurve curve_ = DriveCurve::Soft;
     LadderFilter lad_[2];
     SvfFilter svf_[2];

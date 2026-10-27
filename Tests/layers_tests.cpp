@@ -102,11 +102,12 @@ int main() {
         z.layers = {layer(0, 70, 10), layer(60, 127, 10)};
         addZone(prog, z);
         install(inst, prog);
-        // Two tones close enough that the zone's filter (lp24 at 20 kHz, the
-        // default since there is no "off", gate C5) treats them alike: it is
-        // 0.10 % down at 1250 Hz against 0.02 % at 500, enough to fail the
-        // 1e-3 level comparisons below; at 600 Hz the difference is 0.01 %.
-        // Both are whole cycles in the 4800-frame Goertzel window.
+        // Two tones close enough that a zone filter would treat them alike.
+        // They were chosen at C5, when the default was lp24 at 20 kHz (0.10 %
+        // down at 1250 Hz against 0.02 % at 500, enough to fail the 1e-3 level
+        // comparisons below; at 600 Hz the difference is 0.01 %); the default
+        // is off now (DESIGN §3), and the pair stays. Both are whole cycles in
+        // the 4800-frame Goertzel window.
         inst.setSample(prog.zones[0].layers[0].id, Sample::mono(kRate, sine(500.0, kRate, 0.5)));
         inst.setSample(prog.zones[0].layers[1].id, Sample::mono(kRate, sine(600.0, kRate, 0.5)));
         double ref = 0, lo = 1e9, hi = -1e9;

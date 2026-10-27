@@ -74,7 +74,7 @@ struct ZoneRt {
     bool keyTrack = true;
     PlayMode mode = PlayMode::Gated;
     TempoMethod tempoMethod = TempoMethod::Stretch;
-    FilterType filter = FilterType::Lp24;
+    FilterType filter = FilterType::Off;
     DriveCurve driveCurve = DriveCurve::Soft;
     double cutoff = 20000.0, resonance = 0.0, drive = 0.0, driveMix = 1.0;
     Envelope::Times amp, filt;
