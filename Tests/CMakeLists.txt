@@ -66,3 +66,69 @@ foreach(kind thirdparty cheader escape missing macro)
     set_tests_properties(header_check_fixture_bad_${kind} PROPERTIES
         PASS_REGULAR_EXPRESSION "R2 header check FAILED: 1 include")
 endforeach()
+
+# ---- The locator (cmake/bootstrap/NassauDigital.cmake) -----------------------
+# Each route a consumer can take, configured in a fresh tree with a minimal
+# consumer (locator/consumer). A route that succeeds must log its route and
+# reach the consumer's own OK line (configure exit 0); a route that must stop
+# must stop with ITS message (CMake wraps an error message's lines, so the
+# patterns allow a newline wherever the message has a space). Network-free: the fetch route is exercised only
+# with -DND_TEST_LOCATOR_FETCH=ON (and by every consumer's CI, which fetches).
+set(ND_LOC_SCRIPT ${CMAKE_CURRENT_SOURCE_DIR}/locator/run_locator.cmake)
+set(ND_LOC_CONSUMER ${CMAKE_CURRENT_SOURCE_DIR}/locator/consumer)
+set(ND_LOC_FILE ${PROJECT_SOURCE_DIR}/cmake/bootstrap/NassauDigital.cmake)
+set(ND_LOC_WS ${CMAKE_CURRENT_BINARY_DIR}/locator_ws)
+function(nd_add_locator_test name regex)
+    add_test(NAME locator_${name}
+        COMMAND ${CMAKE_COMMAND} -DBUILD_DIR=${ND_LOC_WS}/build_${name}
+                -DLOCATOR=${ND_LOC_FILE} -DCONSUMER=${ND_LOC_CONSUMER} ${ARGN}
+                -P ${ND_LOC_SCRIPT})
+    set_tests_properties(locator_${name} PROPERTIES PASS_REGULAR_EXPRESSION "${regex}")
+endfunction()
+
+# 1. explicit: this very checkout, as the suite passes it. Also proves the core
+#    configures as a subproject without adding its tests.
+nd_add_locator_test(explicit
+    "nassau-digital: explicit NASSAU_DIGITAL_DIR, [^\n]* at [^\n]*\n.*locator consumer: OK.*configure exit 0"
+    "-DARGS=-DND_TEST_GIT_REF=0000000000000000000000000000000000000000,-DNASSAU_DIGITAL_DIR=${PROJECT_SOURCE_DIR},-DNASSAU_DIGITAL_ALLOW_FETCH=OFF")
+# An explicit directory holding no core stops; it never falls back, even with
+#    a usable sibling present and the fetch allowed.
+nd_add_locator_test(explicit_empty
+    "NASSAU_DIGITAL_DIR=[^ \n]*empty_checkout[ \n]+holds[ \n]+no[ \n]+nassau-digital[ \n]+checkout.*configure exit 1"
+    "-DFAKE_SIBLING=${ND_LOC_WS}/nassau-digital"
+    "-DARGS=-DND_TEST_GIT_REF=0000000000000000000000000000000000000000,-DNASSAU_DIGITAL_DIR=${ND_LOC_WS}/empty_checkout,-DNASSAU_DIGITAL_SIBLING_ROOT=${ND_LOC_WS}/consumer_root")
+# 2. sibling: a stand-in checkout beside the consumer's root.
+nd_add_locator_test(sibling
+    "nassau-digital: sibling checkout, [^\n]*locator_ws/nassau-digital at [^\n]*\n.*locator consumer: OK.*configure exit 0"
+    "-DFAKE_SIBLING=${ND_LOC_WS}/nassau-digital"
+    "-DARGS=-DND_TEST_GIT_REF=0000000000000000000000000000000000000000,-DNASSAU_DIGITAL_SIBLING_ROOT=${ND_LOC_WS}/consumer_root,-DNASSAU_DIGITAL_ALLOW_FETCH=OFF")
+# No checkout anywhere and the fetch off: stop with the clone command.
+nd_add_locator_test(none_fetch_off
+    "nassau-digital not found.*fetch off\\)\\..*git clone https://github.com/tweggen/nassau-digital.git [^ \n]*nowhere/nassau-digital\n.*configure exit 1"
+    "-DARGS=-DND_TEST_GIT_REF=0000000000000000000000000000000000000000,-DNASSAU_DIGITAL_SIBLING_ROOT=${ND_LOC_WS}/nowhere/root,-DNASSAU_DIGITAL_ALLOW_FETCH=OFF")
+# A checkout from before the locator (no nassau::digital): stop, naming it,
+#    rather than let the consumer's link fail at generate time.
+nd_add_locator_test(predates
+    "defines[ \n]+no[ \n]+nassau::digital[ \n]+target:[ \n]+it[ \n]+predates.*configure exit 1"
+    "-DFAKE_OLD=${ND_LOC_WS}/old_checkout"
+    "-DARGS=-DND_TEST_GIT_REF=0000000000000000000000000000000000000000,-DNASSAU_DIGITAL_DIR=${ND_LOC_WS}/old_checkout")
+set_tests_properties(locator_explicit_empty locator_sibling PROPERTIES RESOURCE_LOCK nd_locator_fake_sibling)
+# The ref these tests never fetch is a placeholder; the locator refuses an
+# unset one, which is what a consumer forgetting its pin would hit.
+nd_add_locator_test(no_ref
+    "NassauDigital.cmake: set NASSAU_DIGITAL_GIT_REF.*configure exit 1"
+    "-DARGS=-DNASSAU_DIGITAL_DIR=${PROJECT_SOURCE_DIR}")
+
+# 3. fetch (network): the pinned commit, with no sibling to find.
+option(ND_TEST_LOCATOR_FETCH "Also test the locator's fetch route (needs github.com)" OFF)
+# The commit to fetch must already carry nassau::digital (this locator's
+# change or later), so there is no default: name one.
+set(ND_TEST_LOCATOR_FETCH_REF "" CACHE STRING "The commit the fetch-route test fetches")
+if(ND_TEST_LOCATOR_FETCH)
+    if(NOT ND_TEST_LOCATOR_FETCH_REF)
+        message(FATAL_ERROR "ND_TEST_LOCATOR_FETCH=ON needs -DND_TEST_LOCATOR_FETCH_REF=<commit>")
+    endif()
+    nd_add_locator_test(fetch
+        "nassau-digital: fetched ${ND_TEST_LOCATOR_FETCH_REF}, [^\n]* at [0-9a-f]+\n.*locator consumer: OK.*configure exit 0"
+        "-DARGS=-DND_TEST_GIT_REF=${ND_TEST_LOCATOR_FETCH_REF},-DNASSAU_DIGITAL_SIBLING_ROOT=${ND_LOC_WS}/nowhere/root")
+endif()
