@@ -12,6 +12,8 @@ add_library(nassau_digital_core STATIC
     nd_program_xml.cpp
     nd_edit.h
     nd_edit.cpp
+    nd_overlay.h
+    nd_overlay.cpp
     nd_sample.h
     nd_interp.h
     nd_envelope.h

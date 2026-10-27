@@ -26,6 +26,8 @@ nd_add_test(layers_tests)
 # ---- C4: envelopes and modulation ----------------------------------------------
 nd_add_test(mod_tests)
 
+# ---- C8: libraries, base and overlay -----------------------------------------------
+nd_add_test(overlay_tests)
 # ---- C7: tempo modes by resampling ------------------------------------------------
 nd_add_test(tempo_tests)
 
