@@ -1,10 +1,12 @@
 #pragma once
 
-// nd_kit_bus.h - the kit bus's drive, after the sum of all voices (DESIGN §3:
-// "overlapping hits distort together, the 909 driven into a hot desk
-// channel"; §4.5 / §12: the program's `busDrive`).
+// nd_kit_bus.h - the kit bus's drive, after the sum of an output's voices
+// (DESIGN §3: "overlapping hits distort together, the 909 driven into a hot
+// desk channel"; §4.5 / §12: the program's `busDrive`). Every output has one
+// of its own (DESIGN §3.1: "its own sum and its own kit-bus drive"); the
+// instrument runs an aux output's only while something feeds it.
 //
-//   all voices -> sum -> [ kit-bus drive ] -> output level -> out
+//   an output's voices -> sum -> [ kit-bus drive ] -> output level -> out
 //
 // The bus has one drive and nothing pluggable (DESIGN §1). Its amount is the
 // program's busDrive; the program has no curve for it, so the bus uses the

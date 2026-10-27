@@ -27,7 +27,7 @@
 // The signal path of one voice (DESIGN §3):
 //
 //   layers (read, pitch, level, layer pan) -> sum -> [drive -> filter] -> amp -> pan
-//   all voices -> sum -> kit-bus drive -> output level -> out
+//   the voices of each output -> sum -> that output's kit-bus drive -> output level -> out
 //
 // The bracketed stage (VoiceFx, nd_voice_fx.h) is nassau-dsp's filters behind
 // the drive waveshaper (nd_drive.h), oversampled when the zone's drive is
@@ -38,6 +38,29 @@
 // After every voice: the kit bus's drive (nd_kit_bus.h, the program's
 // busDrive), then the program's output level (DESIGN §3: Σ -> kit-bus drive
 // -> output).
+//
+// Outputs (DESIGN §3.1). Main and kNumAuxOutputs aux outputs, each a stereo
+// pair and a bus of its own: its own sum and its own kit bus. A voice plays
+// on the output its zone names (Zone::output, latched at note-on like every
+// zone parameter but drive), and on no other. An aux output that is not
+// routed falls back to main: its voices are summed into main, in note-on
+// order among main's own, before main's kit bus, so main sounds exactly as
+// if those zones were set to main. Which aux outputs are routed is state
+// (setRoutedOutputs()); an output the host hands no buffer for counts as not
+// routed, whatever the mask says. A routing change while voices sound on the
+// output it moves is a crossfade of kRouteFadeFrames frames from the old
+// destination to the new, counted on the instrument's own frames (so the bytes
+// do not depend on the host's block size); a change asked for during a
+// crossfade starts when that one ends. An output with nothing sounding on it
+// switches at once, and so does reset(). The kit bus of an aux output runs
+// only while that output is fed (and for kRouteFadeFrames after, to let its
+// chain drain); otherwise it is at rest and costs nothing.
+//
+// Bus drive per output: the program has one busDrive (DESIGN §12 names no
+// other), and every output's kit bus takes that amount, each on its own sum.
+// DESIGN §3.1 and §4.5 give each output its own kit-bus drive; the attribute
+// that would set an aux output's own amount is the author's to name (see the
+// C6 PR), and the runtime keeps one amount per output so it slots in there.
 //
 // Tempo (DESIGN §5). A resample tempo mode is one more factor in the read
 // rate, songTempo / layerTempo, applied per control block (setTempo()).
@@ -146,9 +169,36 @@ public:
     /// page; voices keep sounding.
     void startPage();
 
-    /// Renders n frames (overwriting outL/outR). `timelineFrame` is the
-    /// project position of the block's first frame. Audio thread.
+    /// Renders n frames of main (overwriting outL/outR), with no aux output
+    /// buffer: every zone plays on main (an aux output with no buffer is not
+    /// routed). `timelineFrame` is the project position of the block's first
+    /// frame. Audio thread.
     void process(int64_t timelineFrame, const Event* events, int numEvents, float* outL, float* outR, int n);
+
+    /// Renders n frames into every output (DESIGN §3.1). outBuses[b][c] is
+    /// output b's channel c (0 = left, 1 = right): b = 0 is main, b = k is aux
+    /// k, for b < numBuses; main must be there. An aux output whose entry is
+    /// null or beyond numBuses has no buffer and counts as not routed; every
+    /// buffer handed in is overwritten (with silence when nothing plays on
+    /// it). This is the layout of qbx's outBuses (twPlugin::process). Audio
+    /// thread.
+    void process(int64_t timelineFrame, const Event* events, int numEvents, float* const* const* outBuses,
+                 int numBuses, int n);
+
+    /// Main plus the aux outputs (DESIGN §3.1, decided: 8 aux pairs).
+    static constexpr int kNumOutputs = 1 + kNumAuxOutputs;
+    /// The crossfade when a routing change moves sounding voices to another
+    /// output, in frames.
+    static constexpr int kRouteFadeFrames = 256;
+
+    /// Which aux outputs are routed: bit k = aux k + 1 (bits above aux 8 are
+    /// ignored), the layout of qbx's twSamplerHost::setRoutedOutputs (qbx's
+    /// twPlugin::setRoutedOutBuses numbers the buses with main as bit 0: its
+    /// mask >> 1 is this one). A zone whose aux output is not routed plays
+    /// through main (DESIGN §3.1). Taken at the next process(); 0 (nothing
+    /// routed) until set. Allocation-free; call it between process() calls.
+    void setRoutedOutputs(uint32_t mask);
+    uint32_t routedOutputs() const;
 
     /// The song tempo, in beats per minute, that the tempo modes follow
     /// (DESIGN §5). A `tempo-loop` or `tempo-oneshot` zone whose method is
@@ -178,8 +228,11 @@ public:
     /// voice compensates it; the kit bus, while its drive is on, does not
     /// (its output is that many frames late then).
     int oversamplingLatency() const;
-    /// Whether the kit bus is running its oversampled drive (busDrive > 0).
+    /// Whether main's kit bus is running its oversampled drive (busDrive > 0).
     bool kitBusOversampling() const;
+    /// Whether output `output`'s kit bus (0 = main, k = aux k) is running its
+    /// oversampled drive. An aux output's bus is at rest while nothing feeds it.
+    bool kitBusOversampling(int output) const;
 
     /// Installs (or with nullptr removes) a tap that sees each voice's
     /// modulation once per control block: for an editor's modulation display,

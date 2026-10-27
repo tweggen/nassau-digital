@@ -315,6 +315,43 @@ own share" here; that share is the author's to set.
 
 DESIGN §3.1.
 
+**DONE 2026-10-27, except C6.3's per-output amount, which waits on the
+author** (the program has one `busDrive` and no attribute for an aux output's
+own; see the C6 PR). `Tests/outputs_tests` 31/31; API (appends):
+`Instrument::process(…, outBuses, numBuses, n)` (qbx's `outBuses[bus][channel]`,
+bus 0 main, bus k aux k), `setRoutedOutputs(mask)` / `routedOutputs()` (bit k =
+aux k+1, as `twSamplerHost`; qbx's `setRoutedOutBuses` mask >> 1),
+`kitBusOversampling(output)`, `kNumOutputs` = 9, `kRouteFadeFrames` = 256.
+C6.1: a zone on aux 3, routed: aux 3 equals the zone's render on main (cmp,
+RMS 0.199654), main's peak exactly 0, the other aux outputs silent; with a main
+zone sounding too, main is exactly that zone alone (cmp) and the aux 3 tone on
+main −299.5 dB. C6.2: aux 3 unrouted, main is cmp-equal to the zone set to
+main in five ways (mask 0; every aux but 3; aux 3 masked but a null buffer;
+numBuses 1; the two-pointer process()), with main's bus drive 0.5, output
+level −3 dB, the zone oversampled and notes interleaved A B A B; the zone
+moves main by up to 0.225. C6.3, at the one `busDrive` 0.5 every output takes:
+main is exactly zone A driven alone and aux 3 exactly zone B driven alone
+(cmp); aux 3 equals B driven on main (cmp); intermodulation across outputs
+−280.9 / −286.3 dB against −18.0 dB on one shared bus; buses of unfed aux
+outputs at rest; an aux output's own amount is not settable. Routing changes
+on a sounding 220 Hz tone, on its crest: largest step 1.00× the tone's own on
+main and aux 3, at bus drive 0 and 0.5 (a hard switch: 34.7×); main + aux 3 =
+the signal within 7.5e-9; a change during a crossfade waits for its end; an
+output nothing sounds on switches at once; `reset()` snaps. R8:
+byte-identical across reset and blocks 256 / 37 / 1000, all nine outputs, seven
+routing changes. R3: 0 allocations over 3000 blocks, 429 routing changes, five
+buffer layouts. Main-only renders byte-identical to before C6 (sha256
+735f6c05…, blocks 256 and 37). Per-voice cost unchanged against C5 (Release,
+Xeon E5-1650 v3, load 16.8 → 9.5 from a qbx build, three runs, base / C6 in
+the same session): one layer drive 0 67.1–68.1 / 66.8–67.6 ns, 4× 317.5–324.3
+/ 319.4–321.3, four layers 167.7–171.3 / 167.9–168.0, four layers 4×
+419.3–431.3 / 420.7–422.9. A bus at `busDrive` 0.5 costs 162.5 ns per frame;
+all nine running 1462.6. Each watched failing: routing ignored (14 checks), no
+fallback (10), the fallback after main's bus (12), one shared bus (9), aux
+buses never run (3), a hard switch (4), a change retargeting a crossfade (2),
+the crossfade restarted per call (7, R8 among them), a heap buffer in the
+routing (3600 allocations), a silent output crossfading (1).
+
 * **C6.1** A zone on aux 3 with aux 3 routed: its signal is on aux 3 and
   absent from main (below −120 dB).
 * **C6.2** The same zone with aux 3 not routed plays through main, and the main
