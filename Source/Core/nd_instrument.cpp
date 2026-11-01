@@ -571,7 +571,11 @@ struct Instrument::Impl {
         // The output, for the voice's whole life: a later routing change does
         // not move it (DESIGN §13, settled 2026-11-01).
         v.dest = (z.output > 0 && (routedMask & present & auxBit(z.output))) ? z.output : 0;
-        v.keyOffset = z.keyTrack ? static_cast<double>(key - z.rootKey) : 0.0;
+        // Tempo modes ignore the key (DESIGN §13, settled 2026-11-01): a
+        // tempo-synced layer plays at the tempo's rate whichever key triggers
+        // it, so key tracking does not transpose it.
+        const bool tempoMode = (z.mode == PlayMode::TempoLoop || z.mode == PlayMode::TempoOneShot);
+        v.keyOffset = (z.keyTrack && !tempoMode) ? static_cast<double>(key - z.rootKey) : 0.0;
         const double v01 = static_cast<double>(vel) / 127.0;
         // velocity -> level: full level at 127, (1 - velToLevel) at 0, linear.
         const double velGain = 1.0 - z.velToLevel * (1.0 - v01);
@@ -600,15 +604,17 @@ struct Instrument::Impl {
             if (L.pos < static_cast<double>(L.lo) || L.pos >= static_cast<double>(L.hi)) continue;
             L.factor = std::exp2(lr.tune / 12.0) * s->sampleRate() / sampleRate;
             // Tempo modes by resampling (DESIGN §5): the layer's `beats` span
-            // its played length [start, end), which at the sample's own rate
-            // makes the tempo it plays at unchanged. At another song tempo the
-            // read rate is scaled by songTempo / that tempo (control()), so
-            // the pitch moves with it. Unknown beats (0) leave the rate alone.
-            // A stretch zone is handed a buffer already rendered to the song
-            // tempo by the host (DESIGN §5), so it plays at its own rate here.
-            const bool tempoMode = (z.mode == PlayMode::TempoLoop || z.mode == PlayMode::TempoOneShot);
-            if (tempoMode && z.tempoMethod == TempoMethod::Resample && lr.beats > 0.0)
-                L.tempoBase = lr.beats * 60.0 * s->sampleRate() / static_cast<double>(L.hi - L.lo);
+            // its loop [loopStart, loopEnd) (DESIGN §13, settled 2026-11-01;
+            // without loop points that is [start, end)), which at the
+            // sample's own rate makes the tempo it plays at unchanged. At
+            // another song tempo the read rate is scaled by songTempo / that
+            // tempo (control()), so the pitch moves with it; a lead-in before
+            // the loop plays at the same rate. Unknown beats (0) leave the
+            // rate alone. A stretch zone is handed a buffer already rendered
+            // to the song tempo by the host (DESIGN §5), so it plays at its
+            // own rate here.
+            if (tempoMode && z.tempoMethod == TempoMethod::Resample && lr.beats > 0.0 && L.loopHi > L.loopLo)
+                L.tempoBase = lr.beats * 60.0 * s->sampleRate() / static_cast<double>(L.loopHi - L.loopLo);
             const double g = voiceGain * dbToGain(lr.level) * velGains[n];
             const double pan = clampd(lr.pan, -1.0, 1.0);
             if (L.channels == 1) {

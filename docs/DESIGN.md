@@ -262,7 +262,14 @@ A tempo mode follows the tempo by one of two methods, chosen per zone, and
   ahead is needed: it is a pitch ratio in the voice, available at once.
 
 Both need the layer's length in **beats** (`beats`), which the editor proposes
-from the file and the user confirms. What follows is about **stretch** only.
+from the file and the user confirms. `beats` spans the layer's **loop**
+`[loopStart, loopEnd)` (without loop points, that is `[start, end)`), not the
+played length; a lead-in before the loop plays at the same rate. A tempo mode
+**ignores the key**: a tempo-synced layer plays at the tempo's rate whichever
+key triggers it, so key tracking does not transpose it (both settled
+2026-11-01, §13). A sounding `tempo-oneshot` follows a tempo change like a
+`tempo-loop`, and the host passes the tempo per block (`setTempo()`), as
+built. What follows is about **stretch** only.
 
 The vocoder renders large blocks on worker threads and never runs on the audio
 path, so a tempo layer is **rendered ahead** into a new generation of its

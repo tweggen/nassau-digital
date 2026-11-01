@@ -213,9 +213,12 @@ public:
     /// (DESIGN §5). A `tempo-loop` or `tempo-oneshot` zone whose method is
     /// `resample` plays each layer with `beats` > 0 at songTempo / layerTempo
     /// times its own rate, where layerTempo = beats * 60 / (the layer's
-    /// played length [start, end) in seconds at the sample's rate): the loop
-    /// period follows the tempo and the pitch moves by 12 * log2 of that
-    /// ratio. Sounding voices follow a change too, from their next control
+    /// loop [loopStart, loopEnd) in seconds at the sample's rate; without
+    /// loop points that is [start, end)): the loop period follows the tempo
+    /// and the pitch moves by 12 * log2 of that ratio, and a lead-in before
+    /// the loop plays at the same rate. A tempo mode ignores the key: every
+    /// key plays the layer at the tempo's rate, whatever the zone's key
+    /// tracking (DESIGN §13, settled 2026-11-01). Sounding voices follow a change too, from their next control
     /// block, by changing their read rate and never their read position, so
     /// a change makes no step. A non-finite or non-positive tempo is ignored.
     /// Allocation-free; call it between process() calls (the host's tempo at
