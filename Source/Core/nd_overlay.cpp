@@ -14,6 +14,7 @@ constexpr const char* kSetProgram = "set-program";
 constexpr const char* kAddZone = "add-zone";
 constexpr const char* kAddLayer = "add-layer";
 constexpr const char* kHideZone = "hide-zone";
+constexpr const char* kHideLayer = "hide-layer";
 constexpr const char* kWasSuffix = ".was";
 constexpr size_t kWasLength = 4;
 
@@ -214,6 +215,19 @@ OverlayEditReport applyHideZone(Program& prog, const XmlNode& verb, OverlayEditR
     return rep;
 }
 
+OverlayEditReport applyHideLayer(Program& prog, const XmlNode& verb, OverlayEditReport rep) {
+    const std::string* t = verb.attribute("layer");
+    uint32_t id = 0;
+    if (!t || !parseTargetId(*t, id)) return refused(rep, verb.name, "needs layer=\"ID\"");
+    if (verb.attributes.size() != 1 || !verb.children.empty())
+        return refused(rep, verb.name, "takes layer=\"ID\" and nothing else");
+    if (!removeLayer(prog, id).ok) {  // the layer, or its zone, is not in this base
+        rep.state = OverlayEditState::Orphaned;
+        rep.missingId = id;
+    }
+    return rep;
+}
+
 // set-program: the program's own attributes, `.was` beside each, never
 // orphaned (there is always a program). `version` and `libraryVersion` are
 // not an overlay's to edit (DESIGN §8).
@@ -242,6 +256,7 @@ OverlayEditReport applyOne(Program& prog, const XmlNode& verb, size_t index) {
     if (verb.name == kAddZone) return applyAddZone(prog, verb, rep);
     if (verb.name == kAddLayer) return applyAddLayer(prog, verb, rep);
     if (verb.name == kHideZone) return applyHideZone(prog, verb, rep);
+    if (verb.name == kHideLayer) return applyHideLayer(prog, verb, rep);
     const bool zone = verb.name == kSetZone;
     if (!zone && verb.name != kSetLayer) {
         rep.state = OverlayEditState::Unknown;
@@ -635,6 +650,25 @@ RecordedEdit recordHideZone(Overlay& overlay, Program& current, uint32_t zoneId)
     return rec;
 }
 
+RecordedEdit recordHideLayer(Overlay& overlay, Program& current, uint32_t layerId) {
+    RecordedEdit rec;
+    rec.kind = RecordedKind::HideLayer;
+    Program next = current;
+    rec.hiddenLayer = removeLayer(next, layerId);  // for the undo: the layer and where it was
+    if (!rec.hiddenLayer.ok) {
+        rec.error = "no layer with id " + std::to_string(layerId);
+        return rec;
+    }
+    XmlNode v;
+    v.name = kHideLayer;
+    v.attributes.emplace_back("layer", std::to_string(layerId));
+    if (!applyStructural(current, {v}, next, rec.error)) return rec;
+    rec.id = layerId;
+    append(overlay, current, rec, {v});
+    current = std::move(next);
+    return rec;
+}
+
 bool undoRecordedEdit(Overlay& overlay, Program& current, const RecordedEdit& edit) {
     if (!edit.ok || overlay.edits.size() != edit.first + edit.count) return false;
     for (size_t i = 0; i < edit.count; ++i)
@@ -649,11 +683,78 @@ bool undoRecordedEdit(Overlay& overlay, Program& current, const RecordedEdit& ed
         case RecordedKind::AddZone: ok = removeZone(prev, edit.id).ok; break;     // with its layers
         case RecordedKind::AddLayer: ok = removeLayer(prev, edit.id).ok; break;
         case RecordedKind::HideZone: ok = reinsertZone(prev, edit.hidden); break;
+        case RecordedKind::HideLayer: ok = reinsertLayer(prev, edit.hiddenLayer); break;
     }
     if (!ok) return false;
     overlay.edits.resize(edit.first);
     if (edit.stampedBaseVersion) overlay.baseVersion.clear();
     current = std::move(prev);
+    return true;
+}
+
+namespace {
+
+// Rewrites every `.was` of a set verb to the target's value in `prog` (the
+// program just before the verb applies), as formatParam writes it, in place:
+// the attribute order and the new values are kept.
+template <typename T>
+void refreshWas(XmlNode& verb, const T& target, const ParamDesc<T>* (*find)(const std::string&)) {
+    for (auto& a : verb.attributes) {
+        if (!endsWithWas(a.first)) continue;
+        const ParamDesc<T>* p = find(a.first.substr(0, a.first.size() - kWasLength));
+        if (p) a.second = formatParam(*p, target);
+    }
+}
+
+void refreshVerb(XmlNode& verb, const Program& prog) {
+    uint32_t id = 0;
+    if (verb.name == kSetProgram) {
+        refreshWas<Program>(verb, prog, &findProgramParam);
+    } else if (verb.name == kSetZone && verb.attribute("zone") && parseTargetId(*verb.attribute("zone"), id)) {
+        if (const Zone* z = prog.findZone(id)) refreshWas<Zone>(verb, *z, &findZoneParam);
+    } else if (verb.name == kSetLayer && verb.attribute("layer") && parseTargetId(*verb.attribute("layer"), id)) {
+        if (const Layer* l = prog.findLayer(id).second) refreshWas<Layer>(verb, *l, &findLayerParam);
+    }
+}
+
+}  // namespace
+
+RebasedOverlay rebaseOverlay(Overlay& overlay, Program& current, const Program& newBase) {
+    RebasedOverlay r;
+    r.before = overlay;
+    r.currentBefore = current;
+    r.fromVersion = overlay.baseVersion;
+    Overlay next = overlay;
+    // Walk the edits in order over the new base, as applyOverlay() does: a
+    // drifted edit's `.was` becomes the value under it at that point, which
+    // includes the earlier edits (two edits of one parameter chain).
+    Program work = newBase;
+    for (size_t i = 0; i < next.edits.size(); ++i) {
+        Program scratch = work;
+        const OverlayEditReport rep = applyOne(scratch, next.edits[i], i);
+        if (rep.state == OverlayEditState::Drifted) {
+            refreshVerb(next.edits[i], work);
+            r.refreshed.push_back(i);
+            scratch = work;
+            applyOne(scratch, next.edits[i], i);
+        } else if (rep.state == OverlayEditState::Orphaned) {
+            r.orphaned.push_back(i);
+        }
+        if (rep.state == OverlayEditState::Applied || rep.state == OverlayEditState::Drifted) work = std::move(scratch);
+    }
+    next.baseVersion = newBase.libraryVersion;
+    r.toVersion = next.baseVersion;
+    overlay = next;
+    current = std::move(work);
+    r.after = overlay;
+    r.ok = true;
+    return r;
+}
+
+bool undoRebase(Overlay& overlay, Program& current, const RebasedOverlay& rebased) {
+    if (!rebased.ok || overlay != rebased.after) return false;
+    overlay = rebased.before;
+    current = rebased.currentBefore;
     return true;
 }
 

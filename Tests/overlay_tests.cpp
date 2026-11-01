@@ -23,7 +23,9 @@
 //      set-zone per zone, and a missing zone orphans only its own; set-program
 //      edits program attributes with `.was` and drift; add-zone / add-layer
 //      take ids from 1000000 on, which a newer base adding zones never
-//      collides with; hide-zone hides a base zone, flatten drops it; every new
+//      collides with; hide-zone hides a base zone and hide-layer a layer,
+//      flatten drops them; rebase accepts a new base (baseVersion and the
+//      drifted .was refreshed, undoable); every new
 //      edit kind is undone exactly (cmp) and orphaned like the others.
 //
 // The library: three zones on keys 36, 38 and 40 (ids 5, 9, 17; tune 1, -3
@@ -760,6 +762,149 @@ int main() {
                   same(play(applyOverlay(v3, o).program), base));
     }
 
+    // ---------------------------------------------------------- hide-layer ---
+    group("2026-11-01 (the author, on #24) hide-layer: hides one layer of a base zone; undoable; flatten drops it");
+    {
+        Overlay o;
+        Program current = v3;
+        const RecordedEdit hide = recordHideLayer(o, current, 6);
+        const std::string verb = hide.ok ? writeXml(o.edits.back()) : std::string();
+        check("recorded as <hide-layer layer=\"6\"/>", hide.ok && verb == "<hide-layer layer=\"6\"/>\n");
+        Program direct = v3;
+        removeLayer(direct, 6);
+        const OverlayResult r = applyOverlay(v3, o);
+        check("what plays has zone 5 without layer 6; the base still has the layer",
+              r.program == direct && current == direct && r.program.findZone(5) && !r.program.findLayer(6).second &&
+                  v3.findLayer(6).second);
+        const Stereo a = play(r.program), base = play(v3);
+        note("RMS from key 36's note-on to key 38's: v3 " + std::to_string(rms(base.l, 0, 4800)) + ", hidden " +
+             std::to_string(rms(a.l, 0, 4800)));
+        check("renders byte-identical to the layer removed by hand (cmp), and differs from v3",
+              same(a, play(direct)) && !same(a, base));
+        check("an edit of the hidden layer is refused while it is hidden", [&] {
+            Overlay x = o;
+            Program c = current;
+            return !recordLayerEdit(x, c, {6}, {ParamEdit::absolute("tune", "0")}).ok;
+        }());
+        const OverlayResult flat = flatten(v3, o);
+        const std::string text = writeProgram(flat.program);
+        const ProgramParseResult reread = parseProgram(text);
+        check("flatten drops it: the written program has zone 5 but no layer 6, equals what plays, renders cmp",
+              reread.ok && text.find("<zone id=\"5\"") != std::string::npos &&
+                  text.find("<layer id=\"6\"") == std::string::npos && reread.program == r.program &&
+                  same(play(reread.program), a));
+        Program noLayer = v3;
+        removeLayer(noLayer, 6);
+        const OverlayResult onNoLayer = applyOverlay(noLayer, o);
+        Overlay h18;
+        Program c18 = v3;
+        recordHideLayer(h18, c18, 18);
+        const OverlayResult onV4 = applyOverlay(v4, h18);
+        check("orphaned (naming the layer) on a base without the layer (6) and on one without its zone (18 on v4)",
+              onNoLayer.orphaned() == std::vector<size_t>({0}) && onNoLayer.edits[0].missingId == 6 &&
+                  onNoLayer.program == noLayer && onV4.orphaned() == std::vector<size_t>({0}) &&
+                  onV4.edits[0].missingId == 18 && onV4.program == v4);
+        const OverlayParseResult bad = parseOverlay(
+            R"(<NassauDigitalOverlay version="1"><hide-layer layer="all"/><hide-layer layer="6 10"/>)"
+            R"(<hide-layer layer="6" zone="5"/><hide-layer/></NassauDigitalOverlay>)");
+        const OverlayResult br = applyOverlay(v3, bad.overlay);
+        bool allRefused = bad.ok && br.edits.size() == 4;
+        for (const auto& e : br.edits) allRefused = allRefused && e.state == OverlayEditState::Refused;
+        check("refused: hide-layer of all, of a list, with another attribute, without a layer; nothing hidden",
+              allRefused && br.program == v3);
+        // A zone with two layers: the hidden one comes back in its place.
+        Program two = v3;
+        Layer second;
+        second.src = "audio/f.wav";
+        const uint32_t l2 = addLayer(two, 5, second);
+        Overlay o2;
+        Program c2 = two;
+        const RecordedEdit h2 = recordHideLayer(o2, c2, 6);
+        check("on a zone with two layers, hiding the first leaves the second",
+              h2.ok && c2.findZone(5)->layers.size() == 1 && c2.findZone(5)->layers[0].id == l2);
+        check("undo: the layer back where it was (first), the program again, the overlay empty",
+              undoRecordedEdit(o2, c2, h2) && c2 == two && c2.findZone(5)->layers[0].id == 6 && o2.edits.empty());
+        check("undo on v3: v3 again, the overlay empty, render cmp",
+              undoRecordedEdit(o, current, hide) && current == v3 && o.edits.empty() &&
+                  same(play(applyOverlay(v3, o).program), base));
+    }
+
+    // -------------------------------------------------------------- rebase ---
+    group("2026-11-01 (the author, on #24) rebase: accept a new base; baseVersion and the drifted .was refreshed");
+    {
+        Program lib3 = v3;
+        lib3.libraryVersion = "3";
+        // Version 4: zone 17's attack changed (0.05), the main level changed
+        // (-3), zone 9 dropped.
+        Program lib4 = v5;
+        lib4.libraryVersion = "4";
+        lib4.outputLevel = -3.0;
+        removeZone(lib4, 9);
+        Overlay o;
+        Program current = lib3;
+        const bool made =
+            recordZoneEdit(o, current, ZoneScope::zones({17}), {ParamEdit::absolute("attack", "0.25")}).ok &&  // #0
+            recordLayerEdit(o, current, {6}, {ParamEdit::absolute("tune", "3")}).ok &&                        // #1
+            recordProgramEdit(o, current, {ParamEdit::absolute("outputLevel", "-6")}).ok &&                   // #2
+            recordZoneEdit(o, current, ZoneScope::zones({9}), {ParamEdit::absolute("tune", "1")}).ok &&       // #3
+            recordZoneEdit(o, current, ZoneScope::zones({17}), {ParamEdit::absolute("attack", "0.5")}).ok;    // #4
+        XmlNode future;
+        future.name = "set-swing";
+        future.attributes.emplace_back("zone", "17");
+        o.edits.push_back(future);  // #5, a newer writer's
+        // #6, written by another hand over #4 with a stale .was: it drifts on
+        // top of #4's 0.5, so its refreshed .was must be 0.5 (the value under
+        // it, earlier edits applied), not the bare base's 0.05. #7 applies
+        // without drift but spells its .was "0.0": left as written.
+        const OverlayParseResult extra = parseOverlay(
+            R"(<NassauDigitalOverlay version="1"><set-zone zone="17" attack="0.75" attack.was="0.3"/>)"
+            R"(<set-layer layer="18" tune="1" tune.was="0.0"/></NassauDigitalOverlay>)");
+        for (const XmlNode& v : extra.overlay.edits) o.edits.push_back(v);
+        const OverlayResult pre = applyOverlay(lib4, o);
+        note("on version 4 before the rebase: " + describe(pre) + "; version " +
+             (pre.versionMismatch() ? pre.baseDrift[0].was + " -> " + pre.baseDrift[0].now : std::string("same")));
+        check("before: version 3 vs 4 reported, #0, #2 and #6 drifted, #3 orphaned (zone 9), #4 applied (0.25 under it)",
+              made && extra.ok && pre.versionMismatch() && pre.drifted() == std::vector<size_t>({0, 2, 6}) &&
+                  pre.orphaned() == std::vector<size_t>({3}) && pre.edits[4].state == OverlayEditState::Applied);
+        const Overlay before = o;
+        const Program currentBefore = current;
+        const RebasedOverlay rb = rebaseOverlay(o, current, lib4);
+        check("rebase: baseVersion 3 -> 4, #0, #2 and #6 refreshed, #3 still orphaned",
+              rb.ok && o.baseVersion == "4" && rb.fromVersion == "3" && rb.toVersion == "4" &&
+                  rb.refreshed == std::vector<size_t>({0, 2, 6}) && rb.orphaned == std::vector<size_t>({3}));
+        check("the refreshed .was are the new base's values: attack.was=\"0.05\", outputLevel.was=\"-3\"",
+              writeXml(o.edits[0]) == "<set-zone zone=\"17\" attack=\"0.25\" attack.was=\"0.05\"/>\n" &&
+                  writeXml(o.edits[2]) == "<set-program outputLevel=\"-6\" outputLevel.was=\"-3\"/>\n");
+        check("a chained edit's .was is the value under it, earlier edits applied: #6 attack.was=\"0.5\" (not 0.05)",
+              writeXml(o.edits[6]) == "<set-zone zone=\"17\" attack=\"0.75\" attack.was=\"0.5\"/>\n");
+        bool untouched = true;
+        for (size_t i : {1, 3, 4, 5, 7}) untouched = untouched && o.edits[i] == before.edits[i];
+        check("every other edit is byte for byte as it was (the applied ones, \"0.0\" included, the orphan, the unknown)",
+              untouched && o.edits.size() == before.edits.size());
+        const OverlayResult post = applyOverlay(lib4, o);
+        note("on version 4 after the rebase: " + describe(post));
+        check("after: no version mismatch, no drift; the orphan is still orphaned",
+              !post.versionMismatch() && post.drifted().empty() && post.orphaned() == std::vector<size_t>({3}));
+        check("what plays does not change: equal to version 4 + the overlay before the rebase (structural and cmp)",
+              post.program == pre.program && current == pre.program && same(play(post.program), play(pre.program)));
+        const std::string text = writeOverlay(o);
+        const OverlayParseResult back = parseOverlay(text);
+        check("the rebased overlay round-trips byte-stable", back.ok && back.overlay == o && writeOverlay(back.overlay) == text);
+        Overlay again = o;
+        Program cAgain = current;
+        const RebasedOverlay rb2 = rebaseOverlay(again, cAgain, lib4);
+        check("rebasing again onto the same base changes nothing (idempotent)",
+              rb2.ok && rb2.refreshed.empty() && again == o && cAgain == current);
+        Overlay later = o;
+        Program cLater = current;
+        recordZoneEdit(later, cLater, ZoneScope::zones({5}), {ParamEdit::absolute("tune", "0")});
+        check("an undo of the rebase after a further edit is refused, nothing changed",
+              !undoRebase(later, cLater, rb) && later.edits.size() == o.edits.size() + 1);
+        check("undo of the rebase: the overlay's bytes and what played before (version 3) again",
+              undoRebase(o, current, rb) && writeOverlay(o) == writeOverlay(before) && current == currentBefore &&
+                  applyOverlay(lib4, o).drifted() == std::vector<size_t>({0, 2, 6}));
+    }
+
     // --------------------------------------------- the format, all verbs ---
     group("2026-11-01 the overlay format with every verb: byte-stable; orphans of every kind; flatten proceeds");
     {
@@ -775,7 +920,7 @@ int main() {
             recordLayerEdit(o, current, {18}, {ParamEdit::absolute("tune", "1")}).ok &&
             recordProgramEdit(o, current, {ParamEdit::absolute("outputLevel", "-1")}).ok &&
             recordAddZone(o, current, nz).ok && recordAddLayer(o, current, 17, Layer{}).ok &&
-            recordHideZone(o, current, 5).ok;
+            recordHideZone(o, current, 5).ok && recordHideLayer(o, current, 10).ok;
         o.attributes.emplace_back("colour", "teal");
         XmlNode future;
         future.name = "set-swing";
@@ -792,17 +937,19 @@ int main() {
         const OverlayResult r4 = applyOverlay(v4, o);
         note("on v4 (no zone 17): " + describe(r4));
         // #0 set-zone 17, #1 set-layer 18, #2 set-program, #3 add-zone, #4 add-layer (into the added zone),
-        // #5 add-layer into 17, #6 hide-zone 5, #7 set-swing.
+        // #5 add-layer into 17, #6 hide-zone 5, #7 hide-layer 10, #8 set-swing.
         check("on v4: exactly the edits naming zone 17 or layer 18 are orphaned (#0, #1, #5), the rest apply",
               r4.orphaned() == std::vector<size_t>({0, 1, 5}) && r4.edits[5].missingId == 17 &&
                   r4.edits[2].state == OverlayEditState::Applied && r4.edits[3].state == OverlayEditState::Applied &&
                   r4.edits[4].state == OverlayEditState::Applied && r4.edits[6].state == OverlayEditState::Applied &&
-                  r4.edits[7].state == OverlayEditState::Unknown);
+                  r4.edits[7].state == OverlayEditState::Applied && r4.edits[8].state == OverlayEditState::Unknown);
         check("...and v4 (no libraryVersion) against baseVersion 3 is reported too", r4.versionMismatch());
         const OverlayResult f4 = flatten(v4, o);
         const ProgramParseResult rf = parseProgram(writeProgram(f4.program));
-        check("flatten on v4 proceeds: the orphans are reported and dropped; zones 9 and 1000000, outputLevel -1",
+        check("flatten on v4 proceeds: the orphans are reported and dropped; zones 9 (layer 10 hidden) and 1000000, "
+              "outputLevel -1",
               f4.orphaned() == r4.orphaned() && rf.ok && rf.program.zones.size() == 2 && rf.program.findZone(9) &&
+                  rf.program.findZone(9)->layers.empty() &&
                   rf.program.findZone(1000000) && rf.program.outputLevel == -1.0 && rf.program == f4.program);
     }
 

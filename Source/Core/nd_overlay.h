@@ -29,6 +29,7 @@
 //   <add-zone zone="ID" p="value" .../>                    a zone of the overlay's own
 //   <add-layer layer="ID" zone="ZONE" p="value" .../>      a layer of its own, in any zone
 //   <hide-zone zone="ID"/>                                 a zone hidden from what plays
+//   <hide-layer layer="ID"/>                               a layer hidden from what plays
 // An added zone or layer takes its id from the range a base never uses
 // (kOverlayIdFirst = 1000000 on), handed out from the overlay's own `nextId`
 // root attribute (never reused, like a program's); add-zone writes every
@@ -36,12 +37,15 @@
 // does. A zone the overlay adds is written as one add-zone followed by one
 // add-layer per layer. Hiding a zone leaves it in the base: the overlay's
 // program does not have it, flatten drops it, and undoing the hide brings it
-// back. set-program edits any program attribute but `version` (the format's)
+// back. hide-layer does the same for one layer (the author, 2026-11-01): its
+// zone stays, the layer is not in what plays, undo puts it back where it was,
+// flatten drops it; a base without the layer (or its zone) orphans it.
+// set-program edits any program attribute but `version` (the format's)
 // and `libraryVersion` (the base's own: an overlay that rewrote it would
 // claim to be a version of the library it is not).
 // The edits are MADE with recordZoneEdit() / recordLayerEdit() /
 // recordProgramEdit() / recordAddZone() / recordAddLayer() /
-// recordHideZone(): a relative edit ("+2") is resolved there into absolute
+// recordHideZone() / recordHideLayer(): a relative edit ("+2") is resolved there into absolute
 // values, and ALL or a zone list ("3 5 7", parseZoneScope()) is expanded into
 // one set-zone per zone, each with its own `.was`. undoRecordedEdit() takes
 // the last recorded edit back out.
@@ -77,6 +81,16 @@
 // OverlayDrift {"libraryVersion", baseVersion, the base's}. An overlay with
 // no baseVersion is not compared. `base` (where the base came from) is
 // carried and written back; the caller chooses the base.
+//
+// Rebase (the author, 2026-11-01): after a drift or version report, the user
+// accepts the new base. rebaseOverlay() stamps baseVersion with the new
+// base's libraryVersion and rewrites the `.was` of every edit that DRIFTED on
+// it to the value the new base (with the earlier edits applied, in order) has
+// under it, so both reports clear. What plays does not change: every new
+// value stays. Orphaned, refused and unknown edits are left exactly as they
+// are (an orphan stays an orphan and applies again if its target returns),
+// and an edit that applied without drift already names the new base's value
+// and is left byte for byte. undoRebase() takes it back.
 //
 // Flatten (DESIGN §8) turns base + overlay into a program of your own: the
 // same program applyOverlay() makes, which refers to no base, and so carries
@@ -166,7 +180,7 @@ OverlayResult applyOverlay(const Program& base, const Overlay& overlay);
 /// the flattened program does not carry it); a hidden zone is not in it.
 OverlayResult flatten(const Program& base, const Overlay& overlay);
 
-enum class RecordedKind { SetZone = 0, SetLayer, SetProgram, AddZone, AddLayer, HideZone };
+enum class RecordedKind { SetZone = 0, SetLayer, SetProgram, AddZone, AddLayer, HideZone, HideLayer };
 
 /// What one recorded edit appended to an overlay, kept for its undo.
 struct RecordedEdit {
@@ -179,6 +193,7 @@ struct RecordedEdit {
     std::vector<PriorValue> prior;  ///< set verbs: the `.was` values, for the undo
     uint32_t id = 0;              ///< AddZone / AddLayer: the id handed out; HideZone: the zone hidden
     RemovedZone hidden;           ///< HideZone: the zone and where it was, for the undo
+    RemovedLayer hiddenLayer;     ///< HideLayer: the layer and where it was, for the undo
     bool stampedBaseVersion = false;  ///< this edit recorded the overlay's baseVersion
 };
 
@@ -207,6 +222,8 @@ RecordedEdit recordAddZone(Overlay& overlay, Program& current, Zone zone);
 RecordedEdit recordAddLayer(Overlay& overlay, Program& current, uint32_t zoneId, Layer layer);
 /// Removes a zone from what plays by a stored hide-zone; the base keeps it.
 RecordedEdit recordHideZone(Overlay& overlay, Program& current, uint32_t zoneId);
+/// Removes one layer from what plays by a stored hide-layer; the base keeps it.
+RecordedEdit recordHideLayer(Overlay& overlay, Program& current, uint32_t layerId);
 /// Undoes the LAST recorded edit: removes its verbs from the overlay and
 /// writes its `.was` values back into `current` (an add: removes what it
 /// added; a hide: puts the zone back where it was), so both are as before
@@ -214,5 +231,23 @@ RecordedEdit recordHideZone(Overlay& overlay, Program& current, uint32_t zoneId)
 /// reused, like a program's). Refused (false, nothing changed) when `edit`
 /// is not the overlay's last edit.
 bool undoRecordedEdit(Overlay& overlay, Program& current, const RecordedEdit& edit);
+
+/// What a rebase did, kept for its undo.
+struct RebasedOverlay {
+    bool ok = false;
+    std::string fromVersion, toVersion;  ///< baseVersion before and after
+    std::vector<size_t> refreshed;       ///< edits whose `.was` were rewritten (they had drifted)
+    std::vector<size_t> orphaned;        ///< edits still orphaned on the new base, left as they were
+    Overlay before, after;               ///< the overlay before and after the rebase
+    Program currentBefore;               ///< what played before (on the old base)
+};
+
+/// Accepts `newBase` as the overlay's base: re-stamps baseVersion and
+/// refreshes the drifted edits' `.was` (see the header comment). `current`
+/// becomes newBase with the overlay applied. Undoable with undoRebase().
+RebasedOverlay rebaseOverlay(Overlay& overlay, Program& current, const Program& newBase);
+/// Undoes a rebase: the overlay and `current` as before it. Refused (false,
+/// nothing changed) when the overlay has changed since the rebase.
+bool undoRebase(Overlay& overlay, Program& current, const RebasedOverlay& rebased);
 
 }  // namespace nd
