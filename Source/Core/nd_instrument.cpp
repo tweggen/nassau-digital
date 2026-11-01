@@ -90,20 +90,23 @@ struct ZoneRt {
 struct ProgramRt {
     std::vector<ZoneRt> zones;
     int polyphony = kDefaultPolyphony;
-    double outputGain = 1.0;
     double masterTune = 0.0;
-    double busDrive[Instrument::kNumOutputs] = {};  // each output's kit-bus drive (DESIGN §3.1, §4.5)
+    // Each output's kit-bus drive and level (DESIGN §3.1, §4.5): [0] main's
+    // (busDrive, outputLevel), [k] aux k's (busDrive<k>, outputLevel<k>).
+    double busDrive[Instrument::kNumOutputs] = {};
+    double outputGain[Instrument::kNumOutputs] = {};
 };
 
 std::unique_ptr<ProgramRt> compile(const Program& p) {
     auto rt = std::make_unique<ProgramRt>();
     rt->polyphony = isValidPolyphony(p.polyphony) ? p.polyphony : kDefaultPolyphony;
-    rt->outputGain = dbToGain(p.outputLevel);
     rt->masterTune = p.masterTune;
-    // The program names one busDrive; every output's bus takes it, each on
-    // its own sum, until the format names an aux output's own (see
-    // nd_instrument.h, "Bus drive per output").
-    for (double& d : rt->busDrive) d = p.busDrive;
+    rt->busDrive[0] = p.busDrive;
+    rt->outputGain[0] = dbToGain(p.outputLevel);
+    for (int k = 1; k < Instrument::kNumOutputs; ++k) {
+        rt->busDrive[k] = p.auxBusDrive[k - 1];
+        rt->outputGain[k] = dbToGain(p.auxOutputLevel[k - 1]);
+    }
     for (const Zone& z : p.zones) {
         ZoneRt r;
         r.id = z.id;
@@ -182,6 +185,7 @@ struct Voice {
     uint64_t seq = 0;  // note-on order
     int key = 0, vel = 0;
     bool noteOffSeen = false;
+    int dest = 0;  // the output it plays on, decided at note-on for its whole life (DESIGN §13, 2026-11-01)
     ZoneRt zone;
     VoiceLayer layers[kMaxLayers];
     int numLayers = 0;
@@ -327,30 +331,26 @@ struct Instrument::Impl {
     VoiceFxShared fx;  // the drive tables and oversampler taps every voice reads
     KitBus bus[kNumOutputs];  // each output's kit bus (DESIGN §3.1); [0] is main's
 
-    // ---- Routing (DESIGN §3.1). Output s's voices play on route[s].dest:
-    // s while aux s is routed, main (0) otherwise; while `fading` they move
-    // from `from` to `dest` over kRouteFadeFrames frames, fadeDone of them
-    // done. route[0] is always main.
-    struct Route {
-        int dest = 0;
-        int from = 0;
-        bool fading = false;
-        int fadeDone = 0;
-    };
-    Route route[kNumOutputs];
+    // ---- Routing (DESIGN §3.1, §13 settled 2026-11-01). A voice's output
+    // (Voice::dest) is decided at its note-on: its zone's aux output if that
+    // is routed and has a buffer, main otherwise, and it stays there until the
+    // voice ends. A routing change reaches only the notes that start after it.
     uint32_t routedMask = 0;          // as the host set it: bit k = aux k + 1
     int drainLeft[kNumOutputs] = {};  // frames an aux bus keeps running after its output stopped being fed
     bool busRunning[kNumOutputs] = {};
+    bool fedNow[kNumOutputs] = {};    // this segment: aux s routed and present, or a voice playing on it
     // Where the outputs go: the host's buffers for this process() call, null
-    // for an aux output the host gave none. A crossfade away from such an
-    // output (its buffer gone along with its routing) writes that half into
-    // `discard`, which nothing reads.
+    // for an aux output the host gave none. A voice whose output has no
+    // buffer in this call (the host withdrew it while the voice sounds) is
+    // rendered into `discard`, which nothing reads: its samples there are
+    // dropped, and the voice carries on, so it is where it would have been
+    // when the buffer comes back.
     static constexpr int kSegment = 256;  // longest stretch rendered at once
+    static constexpr int kBusDrainFrames = 256;  // an aux bus's run-on after its feed stops
     float* dstL[kNumOutputs] = {};
     float* dstR[kNumOutputs] = {};
     float discardL[kSegment] = {}, discardR[kSegment] = {};
     uint32_t present = 0;  // the aux outputs with a buffer in this call (auxBit)
-    float fadeL[kSegment] = {}, fadeR[kSegment] = {};  // a crossfading voice, before it is split
     ModulationTap tap = nullptr;
     void* tapUser = nullptr;
 
@@ -568,6 +568,9 @@ struct Instrument::Impl {
         v.key = key;
         v.vel = vel;
         v.zone = z;
+        // The output, for the voice's whole life: a later routing change does
+        // not move it (DESIGN §13, settled 2026-11-01).
+        v.dest = (z.output > 0 && (routedMask & present & auxBit(z.output))) ? z.output : 0;
         // Tempo modes ignore the key (DESIGN §13, settled 2026-11-01): a
         // tempo-synced layer plays at the tempo's rate whichever key triggers
         // it, so key tracking does not transpose it.
@@ -746,84 +749,51 @@ struct Instrument::Impl {
 
     static uint32_t auxBit(int s) { return 1u << (s - 1); }
 
-    // Whether output s's bus has anything coming in: its own voices, or the
-    // tail of a crossfade away from it.
-    bool fed(int s) const { return route[s].dest == s || (route[s].fading && route[s].from == s); }
-
-    bool sounding(int s) const {
+    // Whether output s's bus has anything coming in: s is routed and present
+    // (so new notes go there), or a voice that started there still sounds.
+    bool fed(int s) const {
+        if (routedMask & present & auxBit(s)) return true;
         for (int i = 0; i < numOrder; ++i)
-            if (voices[static_cast<size_t>(order[static_cast<size_t>(i)])].zone.output == s) return true;
+            if (voices[static_cast<size_t>(order[static_cast<size_t>(i)])].dest == s) return true;
         return false;
     }
 
-    // Starts the routing changes that are due, at the first frame of a
-    // segment: an aux output goes to itself while routed and present, to main
-    // otherwise. A crossfade under way finishes first; an output nothing
-    // sounds on switches at once.
-    void updateRoutes() {
-        const uint32_t live = routedMask & present;
+    // At the first frame of a segment: which aux buses run. A bus runs while
+    // its output is present and fed, and for kBusDrainFrames after its feed
+    // stops, so the chain's delay line plays out; then it rests, and starts
+    // from rest (with its own switch-on crossfade) when fed again.
+    void updateBuses() {
         for (int s = 1; s < kNumOutputs; ++s) {
-            Route& r = route[s];
-            const bool wasFed = fed(s);
-            if (r.fading && r.fadeDone >= kRouteFadeFrames) r.fading = false;
-            const int want = (live & auxBit(s)) ? s : 0;
-            if (!r.fading && r.dest != want) {
-                r.from = r.dest;
-                r.dest = want;
-                r.fadeDone = 0;
-                r.fading = sounding(s);
-            }
-            // An aux bus keeps running a while after its feed stops, so the
-            // chain's delay line plays out; then it rests, and starts from
-            // rest (with its own switch-on crossfade) when fed again.
-            if (wasFed && !fed(s)) drainLeft[s] = kRouteFadeFrames;
-            const bool run = (present & auxBit(s)) && (fed(s) || drainLeft[s] > 0);
+            const bool was = fedNow[s];
+            fedNow[s] = fed(s);
+            if (was && !fedNow[s]) drainLeft[s] = kBusDrainFrames;
+            const bool run = (present & auxBit(s)) && (fedNow[s] || drainLeft[s] > 0);
             if (busRunning[s] && !run) bus[s].reset();
             busRunning[s] = run;
         }
     }
 
     // How far the current segment may run from `left` frames remaining: to
-    // the end of a crossfade or a drain, so each is in one state per segment.
+    // the end of a drain, so each bus is in one state per segment, and no
+    // further than the discard buffer.
     int segmentLimit(int left) const {
         int k = std::min(left, kSegment);
-        for (int s = 1; s < kNumOutputs; ++s) {
-            if (route[s].fading) k = std::min(k, kRouteFadeFrames - route[s].fadeDone);
-            if (drainLeft[s] > 0 && !fed(s)) k = std::min(k, drainLeft[s]);
-        }
+        for (int s = 1; s < kNumOutputs; ++s)
+            if (drainLeft[s] > 0 && !fedNow[s]) k = std::min(k, drainLeft[s]);
         return std::max(k, 1);
     }
 
-    // Renders voice v's next k frames at offset pos onto its output's
-    // destination; while that output crossfades, split between the old
-    // destination and the new. Returns false when the voice ended.
-    float* outL(int s, int pos) { return dstL[s] ? dstL[s] + pos : discardL; }
-    float* outR(int s, int pos) { return dstR[s] ? dstR[s] + pos : discardR; }
-
+    // Renders voice v's next k frames at offset pos onto its output; into
+    // `discard` when that output has no buffer in this call. Returns false
+    // when the voice ended.
     bool renderRouted(Voice& v, int pos, int k) {
-        const Route& r = route[v.zone.output];
-        // A steady destination always has a buffer: updateRoutes() sends an
-        // output without one to main.
-        if (!r.fading) return render(v, dstL[r.dest] + pos, dstR[r.dest] + pos, k);
-        std::fill(fadeL, fadeL + k, 0.0f);
-        std::fill(fadeR, fadeR + k, 0.0f);
-        const bool alive = render(v, fadeL, fadeR, k);
-        float *aL = outL(r.from, pos), *aR = outR(r.from, pos);
-        float *bL = outL(r.dest, pos), *bR = outR(r.dest, pos);
-        for (int i = 0; i < k; ++i) {
-            // Equal gain: the same signal on two outputs, which a mix sums coherently.
-            const float t = static_cast<float>(r.fadeDone + i + 1) / static_cast<float>(kRouteFadeFrames);
-            aL[i] += (1.0f - t) * fadeL[i];
-            aR[i] += (1.0f - t) * fadeR[i];
-            bL[i] += t * fadeL[i];
-            bR[i] += t * fadeR[i];
-        }
-        return alive;
+        if (!dstL[v.dest]) return render(v, discardL, discardR, k);
+        return render(v, dstL[v.dest] + pos, dstR[v.dest] + pos, k);
     }
 
     // After a segment's voices: each running bus over the segment (with a
-    // program; without one there is no bus drive), then the crossfades and
-    // drains move on (always: voices outlive a cleared program).
+    // program; without one there is no bus drive), then the drains move on
+    // (always: voices outlive a cleared program).
     void finishSegment(int pos, int k) {
         if (rt) {
             for (int s = 0; s < kNumOutputs; ++s) {
@@ -831,20 +801,18 @@ struct Instrument::Impl {
                 bus[s].process(dstL[s] + pos, dstR[s] + pos, k);
             }
         }
-        for (int s = 1; s < kNumOutputs; ++s) {
-            if (route[s].fading) route[s].fadeDone += k;
-            if (drainLeft[s] > 0 && !fed(s)) drainLeft[s] -= k;
-        }
+        for (int s = 1; s < kNumOutputs; ++s)
+            if (drainLeft[s] > 0 && !fedNow[s]) drainLeft[s] -= k;
     }
 
-    // reset(): the routing as asked for, at once, every aux bus at rest.
+    // reset(): no voice, every aux bus at rest; a routed one runs from the
+    // next process() on.
     void snapRoutes() {
         for (int s = 0; s < kNumOutputs; ++s) {
-            route[s] = Route{};
-            route[s].dest = (s > 0 && (routedMask & auxBit(s))) ? s : 0;
             drainLeft[s] = 0;
             bus[s].reset();
-            busRunning[s] = (s == 0) || route[s].dest == s;
+            fedNow[s] = s > 0 && (routedMask & auxBit(s));
+            busRunning[s] = (s == 0) || fedNow[s];
         }
     }
 
@@ -1028,10 +996,10 @@ void Instrument::process(int64_t timelineFrame, const Event* events, int numEven
     int pos = 0;
     int e = 0;
     while (pos < n || e < numEvents) {
-        // The routing changes due at this frame, before its events: a change
-        // the host made between two calls is in place for the next call's
-        // first note.
-        m.updateRoutes();
+        // Which aux buses run from this frame, before its events: a routing
+        // change the host made between two calls is in place for the next
+        // call's first note.
+        m.updateBuses();
         // Events at this frame.
         while (e < numEvents && events[e].offset <= pos) {
             const Event& ev = events[e++];
@@ -1061,12 +1029,12 @@ void Instrument::process(int64_t timelineFrame, const Event* events, int numEven
         m.finishSegment(pos, k);
         pos = until;
     }
-    // Then the output level, on every output.
-    if (m.rt && m.rt->outputGain != 1.0) {
-        const float g = static_cast<float>(m.rt->outputGain);
+    // Then each output's own level.
+    if (m.rt) {
         for (int b = 0; b < kNumOutputs; ++b) {
             float *l = m.dstL[b], *r = m.dstR[b];
-            if (!l) continue;
+            if (!l || m.rt->outputGain[b] == 1.0) continue;
+            const float g = static_cast<float>(m.rt->outputGain[b]);
             for (int i = 0; i < n; ++i) {
                 l[i] *= g;
                 r[i] *= g;

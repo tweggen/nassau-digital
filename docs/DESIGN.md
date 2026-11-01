@@ -183,13 +183,17 @@ and a snare can get its own reverb. NassauDigital has the same:
 * **Main**, a stereo pair, plus **eight aux outputs** **(decided: 8)**, each a
   stereo pair, so a stereo sample or a panned mono one keeps its image on an
   aux output as on main. Every zone has an `output` field: main or aux 1–8.
-* **Each output is a bus of its own** with its own sum and its own kit-bus
-  drive. A zone sent to an aux output does not also reach main, so the kick
-  that keys the ducking is not doubled in the mix.
+* **Each output is a bus of its own** with its own sum, its own kit-bus
+  drive and its own level (program attributes `busDrive1` … `busDrive8` and
+  `outputLevel1` … `outputLevel8` for aux 1–8; `busDrive` and `outputLevel`
+  are main's). A zone sent to an aux output does not also reach main, so the
+  kick that keys the ducking is not doubled in the mix.
 * **An aux output nobody listens to falls back to main.** qbx tells the
   instrument which outputs are routed (§9.1); a zone whose output is not routed
   plays through main, so a kit never goes silent because a return track is
   missing. Which outputs are routed is state, so renders stay deterministic.
+* **A routing change reaches new notes only**: a sounding voice keeps the
+  output it started on until it ends (settled 2026-11-01, §13).
 
 **In qbx this needs new work.** qbx already reports a plugin's extra output
 buses but routes only the first and drops the rest. Its multi-output design
@@ -590,3 +594,52 @@ open is collected under **Still open** below.
 
 To measure in the gates: the interpolator, the oversampling factor, and the
 CPU budget per voice, which should be named first.
+
+**Settled on 2026-11-01** (the author, in an interview; each is applied in the
+gate named, by the change that builds it — until then the code still does what
+GATES.md records as built):
+
+* **C5 drive voicing.** `tube` becomes **asymmetric** (even harmonics), with a
+  DC blocker on driven voices; it replaces the symmetric triode, which is not
+  kept as a curve of its own. soft, hard and fold, the +20 dB input gain, the
+  level compensation and the dry→wet fade over drive 0 … 0.05 stand.
+  Bit and rate reduction stays a candidate.
+* **C5 oversampling is a zone setting**: a new append-only zone attribute
+  choosing 2× or 4×, **default 4×**. Undriven voices are still not oversampled.
+* **C5 what follows a sounding voice**: **drive, cutoff and resonance** follow
+  (smoothed per control block); curve, filter type and mix stay as at note-on.
+* **C5.3 is defined with lp24 at 20 kHz in the path.** With the filter `off`,
+  aliasing at 44.1 kHz is the user's choice (measured: tube −73.0, fold −76.0
+  dB at 4×); it is reported, not bounded.
+* **C5 per-voice budget**: 40 ns (one layer) and 140 ns (four layers) bound the
+  **default voice** (filter `off`, undriven). Filtered and driven voices are
+  measured and reported, not bounded.
+* **C5 kit-bus curve**: fixed **soft**, no attribute.
+* **C5 kit-bus latency** (47 frames while a bus drive is on): as built, and
+  revisited when qbx gets plugin delay compensation.
+* **C6.3 per-output bus drive**: flat program attributes **`busDrive1` …
+  `busDrive8`** beside `busDrive` (main); a missing one is 0 (that output's bus
+  off).
+* **C6 per-output level**: **`outputLevel1` … `outputLevel8`** beside
+  `outputLevel` (main); a missing one is 0 dB.
+* **C6 a routing change under a sounding voice**: the voice **keeps the route
+  it started on** until it ends; only new notes follow the change (replaces the
+  256-frame crossfade). An unrouted aux may then keep sounding into a buffer the
+  host no longer reads; that is accepted.
+* **C6 accepted as built**: an output the host hands no buffer for counts as
+  unrouted; changing a zone's `output` while it sounds affects only new notes.
+* **C7 `beats` spans the loop** `[loopStart, loopEnd)`, not the played length;
+  a lead-in plays at the same rate.
+* **C7 tempo modes ignore the key**: a tempo-synced layer plays at the tempo's
+  rate whichever key triggers it.
+* **C7 accepted as built**: a sounding tempo-oneshot follows a tempo change;
+  the host passes the tempo with `setTempo()` per block.
+* **C8 library versions**: a new append-only program attribute
+  **`libraryVersion`**; applying an overlay to a base of another version still
+  applies and reports the mismatch.
+* **C8 zone lists** (`zone="3 5 7"`) are **expanded into one edit per zone**
+  when the edit is made, like `all`.
+* **C8 structural edits in an overlay**: zones and layers an overlay adds take
+  ids from a **reserved high range** a base never uses; removing a base zone is
+  a stored "hide" edit.
+* **C8 orphans**: as built (reported per edit; flatten proceeds and drops them).
