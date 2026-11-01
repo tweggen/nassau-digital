@@ -92,6 +92,13 @@ the two this schedule depends on:
 * **X2.2** A compressor on track B keyed from a return track ducks B by the
   expected gain while the key sounds (measured RMS), and not without it.
 
+**X2.1 DONE 2026-10-27** (qbx proposal 55 M0–M2: qbx#310, #311, #315, QBX-248
+and QBX-251). `return_track_split_cmp.qxa`: `tw.test.clap.split`'s bus 1
+routed to a return track renders byte-identical to a plain track playing the
+same clip (576044 B, on `test_stereo.wav`, whose channels differ). M3, the
+engine half of sidechain inputs (qbx#318, QBX-252), is merged too.
+**X2.2 open**: proposal 55 M4 (QBX-262), the sidechain model and verbs.
+
 ---
 
 ## Track C — the core
@@ -477,6 +484,18 @@ DESIGN §9.1, §9.2.
 * **Q0.4** The slot's saved state holds the program reference only: the
   project file grows by less than 1 KB when a 10 MB sample is added.
 
+**DONE 2026-10-27** (qbx#312, QBX-250; core pinned at 041456a, moved to
+5adc61a by qbx#319 with no golden or bound moving). Q0.1: `tw/sampler` builds
+the core and registers `tw.native.nassaudigital`; `check_layering.py` clean.
+The core is not a submodule: it is found by the locator (one pin per repo,
+§9.2), so Q0.1's "submodule" reads as "built from source by qbx". Q0.2:
+`twSamplerHost::stats()` reports what `process()` itself last ran on (program
+serial, routed mask, sample count, voices), so the lock-free read is observed,
+not assumed. Q0.3: `sampler_q0_engine_seam.qxa` silent before frame 1000, RMS
+0.49997 / 0.24998 after against the file's 0.49999 / 0.24999, `cmp` against
+the golden. Q0.4: the project grows by 0 bytes with a 10 MiB sample installed
+(`sampler_slot_test`). Corrections from the build: qbx proposal 56 §11 "Q0".
+
 ### Q1 — Model and verbs
 
 DESIGN §9.2, §9.3.
@@ -487,6 +506,24 @@ DESIGN §9.2, §9.3.
 * **Q1.2** The program is saved in the project and reloads identically
   (structural equality); a program element written by a newer version keeps
   its unknown attributes.
+
+**DONE 2026-10-27** (qbx#317, QBX-253). Q1.1: `sampler_q1_verbs.qxa` captures
+the program, runs each of `add-zone`, `remove-zone`, `add-layer`,
+`remove-layer`, `set-zone`, `set-layer`, `set-sampler-program` and
+`select-zones`, asserts it changed, undoes once and asserts it equal to the
+capture by the core's own equality (an undone `add-zone` everywhere but
+`nextId`, which DESIGN §2 never reuses: asserted separately at 8). `tune` +95
+on all zones from 2/−10/0 gives 96 (clamped)/85/95 and one undo restores
+2/−10/0; relative edits on enums and bools are refused. Q1.2:
+`sampler_q1_persist.qxa` save → reload → save → reload is structurally equal;
+`sampler_q1_newer_program.qxa` keeps a `version="2"` program's unknown
+attributes (program, zone, layer) and elements, in order, through load, edit,
+save and reload. 14 sabotages, all caught. The program is stored as character
+data, not nested elements (QDom sorts attributes), and five assumptions await
+the author (selection unsaved and undoable, `=` for a negative absolute value,
+ids from `nextId`, one snapshot per edit, the program object made by the first
+edit rather than at insert): qbx proposal 56 §11 "Q1". Open: QBX-254
+(`remove-plugin` + undo loses the program).
 
 ### Q2 — Generations and determinism
 
