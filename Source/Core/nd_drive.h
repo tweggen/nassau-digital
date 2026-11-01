@@ -5,10 +5,15 @@
 // and on the kit bus (after the sum of the voices).
 //
 // The curves (DESIGN §3 names them: soft, tube, hard, fold), each with unity
-// slope at 0 and bounded by 1:
+// slope at 0 and f(0) = 0, bounded (by 1 but for tube):
 //
 //   soft   x / sqrt(1 + x^2)                  smooth everywhere
-//   tube   x / (1 + |x|)                      nassau-dsp's shapeTriodeK, knee 1
+//   tube   (1+b)^2 (T(x + b) - T(b)),  T(u) = u / (1 + |u|)   a biased triode
+//          (nassau-dsp's shapeTriodeK, knee 1, at an operating point b =
+//          kTubeBias): asymmetric, so it makes even harmonics (decided
+//          2026-11-01; it replaced the symmetric x / (1 + |x|)). Its ceilings
+//          are +(1+b) and -(1+b)(1+2b), 2 and -6 at b = 1. It makes DC too,
+//          which the voice's DC blocker removes (nd_voice_fx.h).
 //   hard   clamp(x, -1, 1)
 //   fold   a triangle fold: x inside [-1, 1], reflected back at +-1
 //
@@ -43,7 +48,7 @@
 // costs a division per sample and acts as a two-sample average on a linear
 // stretch (a half-sample delay at the oversampled rate: a fraction of a frame
 // that the voice's latency compensation does not count). `tube` has none
-// without a logarithm (F = |u| - ln(1 + |u|)) and runs plain.
+// without a logarithm (its antiderivative has ln(1 + |u|)) and runs plain.
 //
 // The constants (20 dB, the -12 dBFS reference, the 0.05 fade-in, the curve
 // formulas) are this gate's proposal; DESIGN §3 names the curves and asks for
@@ -66,13 +71,30 @@ struct DriveConst {
     static constexpr double kFadeIn = 0.05;     ///< drive below this crossfades from dry
     static constexpr int kSteps = 64;           ///< compensation table resolution over 0..1
     static constexpr int kNumCurves = 4;
+    /// tube's operating point, in the curve's input units (2026-11-01). At
+    /// b = 1 the 2nd harmonic leads the 3rd at the reference level at every
+    /// amount (a -12 dBFS 1 kHz sine: 2nd -15.8 / -10.5 / -13.8 dB, 3rd
+    /// -31.6 / -21.5 / -17.1 dB re the fundamental at drive 0.25 / 0.5 / 1,
+    /// docs/GATES.md C5); at b = 0.5 the 3rd leads at drive 1 (-14.6 vs
+    /// -19.8). Hotter input (0 dBFS at drive 1) leads with the 3rd, as an
+    /// overdriven triode does.
+    static constexpr double kTubeBias = 1.0;
 };
+
+/// tube, the biased triode: (1+b)^2 (T(x + b) - T(b)) in closed form, one
+/// division a branch (no transcendental, R5).
+inline double driveTube(double x) {
+    constexpr double b = DriveConst::kTubeBias, k = 1.0 + b;
+    const double u = x + b;
+    // u >= 0: (1+b)^2 (u / (1+u) - b / (1+b)) = (1+b) x / (1+u).
+    return u >= 0.0 ? k * x / (1.0 + u) : k * k * (u / (1.0 - u) - b / k);
+}
 
 /// One curve, one sample. f(0) = 0, f'(0) = 1, |f| <= 1.
 inline double driveCurve(DriveCurve c, double x) {
     switch (c) {
         case DriveCurve::Soft: return x / std::sqrt(1.0 + x * x);
-        case DriveCurve::Tube: return shapeTriodeK(x, 1.0);
+        case DriveCurve::Tube: return driveTube(x);
         case DriveCurve::Hard: return x < -1.0 ? -1.0 : (x > 1.0 ? 1.0 : x);
         case DriveCurve::Fold: {
             // Period 4: t = (x + 1) / 4 in [0, 1), f = 1 - 4 |t - 1/2|.
@@ -185,9 +207,9 @@ struct DriveSetting {
     }
 };
 
-/// One sample through the stage: y = x + w (C f(G x) - x), with f the curve's
-/// mean over the step when `adaa` and the curve has an antiderivative.
-inline double driveShape(const DriveSetting& d, DriveCurve c, bool adaa, DriveChannel& ch, double x) {
+/// The stage's wet signal for one sample, C f(G x), with f the curve's mean
+/// over the step when `adaa` and the curve has an antiderivative.
+inline double driveWet(const DriveSetting& d, DriveCurve c, bool adaa, DriveChannel& ch, double x) {
     const double u = d.gain * x;
     double f;
     if (adaa && driveHasAntiderivative(c)) {
@@ -200,7 +222,35 @@ inline double driveShape(const DriveSetting& d, DriveCurve c, bool adaa, DriveCh
     } else {
         f = driveCurve(c, u);
     }
-    return x + d.wet * (d.comp * f - x);
+    return d.comp * f;
+}
+
+/// One sample through the stage: y = x + w (C f(G x) - x).
+inline double driveShape(const DriveSetting& d, DriveCurve c, bool adaa, DriveChannel& ch, double x) {
+    const double s = driveWet(d, c, adaa, ch, x);
+    return x + d.wet * (s - x);
+}
+
+/// A one-pole DC blocker, y = s - s[n-1] + R y[n-1], for a voice's wet
+/// signal (2026-11-01: an asymmetric curve makes DC). R is set at note-on
+/// (dcBlockerPole), never per sample.
+struct DcBlocker {
+    double s1 = 0.0, y1 = 0.0;
+    double process(double s, double R) {
+        const double y = s - s1 + R * y1;
+        s1 = s;
+        y1 = y;
+        return y;
+    }
+};
+
+/// The blocker's corner (Hz; the author, 2026-11-01: 10 Hz, first built at
+/// 5) and its pole at a rate: -0.26 dB at 40 Hz, -0.97 dB at 20 Hz on the
+/// wet share (docs/GATES.md C5 measures it).
+constexpr double kDcBlockerHz = 10.0;
+inline double dcBlockerPole(double rate) {
+    constexpr double kPi = 3.14159265358979323846;
+    return std::exp(-2.0 * kPi * kDcBlockerHz / rate);
 }
 
 }  // namespace nd

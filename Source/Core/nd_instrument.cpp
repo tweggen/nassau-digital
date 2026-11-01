@@ -83,6 +83,7 @@ struct ZoneRt {
     double modWheelToLfoDepth = 0.0, modWheelToCutoff = 0.0, filterKeyTrack = 0.0, filterEnvAmount = 0.0;
     double pan = 0.0, level = 0.0, tune = 0.0;
     int choke = 0, output = 0;
+    int oversample = 4;  // a driven voice's factor (Zone::oversample)
     LayerRt layers[kMaxLayers];
     int numLayers = 0;
 };
@@ -124,6 +125,7 @@ std::unique_ptr<ProgramRt> compile(const Program& p) {
         r.resonance = z.resonance;
         r.drive = z.drive;
         r.driveMix = z.driveMix;
+        r.oversample = oversamplingFactor(z.oversample);
         r.amp = {z.attack, z.hold, z.decay, z.sustain, z.release};
         r.filt = {z.filterAttack, 0.0, z.filterDecay, z.filterSustain, z.filterRelease};
         r.lfoRate = z.lfoRate;
@@ -180,6 +182,43 @@ struct VoiceLayer {
     float gainL = 0.0f, gainR = 0.0f;  // level x velocity x layer pan
 };
 
+// A zone parameter that follows a sounding voice (DESIGN §3, decided
+// 2026-11-01: drive, cutoff and resonance), glided to a new value over
+// kGlideBlocks of the voice's control blocks, so a change is heard without a
+// step: linearly (drive, resonance) or geometrically (cutoff, a constant
+// ratio per block, so it moves evenly in pitch). The per-block value is then
+// ramped across each block as before (the drive's setting linearly, the
+// filter's g per sample). The last block lands exactly on the new value, and
+// a value that never changed is the zone's own, bit for bit. The ratio's
+// pow() runs when the program changes (host side), never per sample (R5).
+struct Glide {
+    static constexpr int kGlideBlocks = 16;  // 512 frames (10.7 ms at 48 kHz), measured: docs/GATES.md C5
+    double now = 0.0, target = 0.0, step = 0.0;
+    int left = 0;
+    bool geometric = false;
+
+    void start(double v, bool geo) {
+        now = target = v;
+        step = 0.0;
+        left = 0;
+        geometric = geo;
+    }
+    void set(double v) {
+        if (v == target) return;
+        target = v;
+        step = geometric ? std::pow(v / now, 1.0 / kGlideBlocks) : (v - now) / kGlideBlocks;
+        left = kGlideBlocks;
+    }
+    /// The value for the next control block.
+    double next() {
+        if (left > 0) {
+            if (--left == 0) now = target;
+            else now = geometric ? now * step : now + step;
+        }
+        return now;
+    }
+};
+
 struct Voice {
     bool active = false;
     uint64_t seq = 0;  // note-on order
@@ -200,6 +239,7 @@ struct Voice {
     double velocity01 = 0.0;
     VoiceFx fx;                 // the drive -> filter stage (nd_voice_fx.h)
     VoiceFxParams fxParams;     // this control block's, modulation applied
+    Glide drive, cutoff, resonance;  // what follows a sounding voice (Glide)
     bool fading = false;
     int64_t fadeLeft = 0, fadeTotal = 1;  // fade gain = fadeLeft / fadeTotal, exactly 0 at the end
 };
@@ -645,8 +685,12 @@ struct Instrument::Impl {
         v.fxParams.drive = z.drive;
         v.fxParams.driveMix = z.driveMix;
         v.fxParams.cutoffHz = z.cutoff;
-        // The oversampling decision, from the drive at note-on, for the voice's
-        // whole life (DESIGN §3).
+        v.fxParams.oversample = z.oversample;
+        v.drive.start(z.drive, false);
+        v.cutoff.start(z.cutoff, true);
+        v.resonance.start(z.resonance, false);
+        // The oversampling decision, from the drive at note-on, at the zone's
+        // factor, for the voice's whole life (DESIGN §3).
         v.fx.start(v.fxParams, fx);
         v.ctrlLeft = 0;
         // An oversampled stage delays by latency() frames. Run the front (the
@@ -709,7 +753,9 @@ struct Instrument::Impl {
         const double cutSemis = z.velToCutoff * v.velocity01 + z.filterEnvAmount * v.filt.value() +
                                 z.lfoToCutoff * lfo * depth + z.modWheelToCutoff * w +
                                 z.filterKeyTrack * static_cast<double>(v.key - z.rootKey);
-        v.fxParams.cutoffHz = clampd(z.cutoff * std::exp2(cutSemis / 12.0), 20.0, 20000.0);
+        v.fxParams.drive = v.drive.next();
+        v.fxParams.resonance = v.resonance.next();
+        v.fxParams.cutoffHz = clampd(v.cutoff.next() * std::exp2(cutSemis / 12.0), 20.0, 20000.0);
         v.fx.control(v.fxParams);
         if (tap) {
             ModulationFrame f;
@@ -894,16 +940,21 @@ void Instrument::setProgram(std::shared_ptr<const Program> program) {
     const int oldPoly = m.rt ? m.rt->polyphony : kDefaultPolyphony;
     m.rt = std::move(rt);
     m.program = std::move(program);
-    // Drive follows a sounding voice (DESIGN §3: automating drive changes the
-    // sound of the note, and never its oversampling, decided at note-on).
-    // Every other zone parameter stays as the voice started with it.
+    // Drive, cutoff and resonance follow a sounding voice, glided (DESIGN §3,
+    // decided 2026-11-01; Glide): automating them changes the sound of the
+    // note, and never its oversampling, decided at note-on. Every other zone
+    // parameter (curve, filter type, mix, ...) stays as the voice started.
     if (m.rt) {
         for (int i = 0; i < m.numOrder; ++i) {
             Voice& v = m.voices[static_cast<size_t>(m.order[static_cast<size_t>(i)])];
             for (const ZoneRt& z : m.rt->zones) {
                 if (z.id != v.zone.id) continue;
                 v.zone.drive = z.drive;
-                v.fxParams.drive = z.drive;
+                v.zone.cutoff = z.cutoff;
+                v.zone.resonance = z.resonance;
+                v.drive.set(z.drive);
+                v.cutoff.set(z.cutoff);
+                v.resonance.set(z.resonance);
                 break;
             }
         }
@@ -1044,12 +1095,6 @@ void Instrument::process(int64_t timelineFrame, const Event* events, int numEven
 }
 
 int Instrument::activeVoices() const { return impl_->numOrder; }
-
-void Instrument::setOversampling(int factor) {
-    if (factor == 2 || factor == 4) impl_->fx.factor = factor;
-}
-
-int Instrument::oversampling() const { return impl_->fx.factor; }
 
 int Instrument::oversamplingLatency() const { return impl_->fx.latency(); }
 

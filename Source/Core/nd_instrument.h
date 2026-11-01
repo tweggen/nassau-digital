@@ -30,10 +30,11 @@
 //   the voices of each output -> sum -> that output's kit-bus drive -> output level -> out
 //
 // The bracketed stage (VoiceFx, nd_voice_fx.h) is nassau-dsp's filters behind
-// the drive waveshaper (nd_drive.h), oversampled when the zone's drive is
-// above zero at note-on. Its oversampling delay is compensated: an
-// oversampled voice runs its layers and that stage `oversamplingLatency()`
-// frames ahead of its amp, so it lines up with one that is not.
+// the drive waveshaper (nd_drive.h), oversampled at the zone's factor
+// (Zone::oversample) when the zone's drive is above zero at note-on. Its
+// oversampling delay is compensated: an oversampled voice runs its layers and
+// that stage its chain's delay (VoiceFx::latency()) frames ahead of its amp,
+// so it lines up with one that is not.
 //
 // After every voice: each output's kit bus's drive (nd_kit_bus.h), then that
 // output's level (DESIGN §3: Σ -> kit-bus drive -> output).
@@ -230,15 +231,11 @@ public:
     /// Voices sounding (including ones fading out after a steal).
     int activeVoices() const;
 
-    /// The oversampling factor (2 or 4) of a voice whose drive is above zero
-    /// at note-on, and of the kit bus while its drive is above zero (DESIGN
-    /// §3: "a measured choice"; the default is the one docs/GATES.md C5
-    /// measured). Voices already sounding keep theirs. Host thread.
-    void setOversampling(int factor);
-    int oversampling() const;
-    /// The oversampling chain's delay, in frames, at the current factor. A
-    /// voice compensates it; the kit bus, while its drive is on, does not
-    /// (its output is that many frames late then).
+    /// The kit bus's oversampling chain delay, in frames (its factor is 4x,
+    /// DESIGN §3, as built): while a bus drive is on, that output is this
+    /// many frames late. A voice oversamples at its zone's factor
+    /// (Zone::oversample, 2x or 4x, decided 2026-11-01) and compensates its
+    /// own delay, so a voice is never late.
     int oversamplingLatency() const;
     /// Whether main's kit bus is running its oversampled drive (busDrive > 0).
     bool kitBusOversampling() const;

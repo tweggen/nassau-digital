@@ -34,7 +34,8 @@
 // 20 kHz the default, which coloured every voice.)
 //
 // Oversampling (DESIGN §3). start() decides it from the zone's drive at
-// note-on: above zero, the drive and the filter run at `factor` times the
+// note-on: above zero, the drive and the filter run at the zone's factor
+// (`oversample`, 2 or 4, a zone setting since 2026-11-01) times the
 // rate between a halfband upsampler and downsampler (nd_oversampler.h), and
 // the decision holds for the life of the voice, so automating drive through
 // zero never switches filter state inside a note. The chain delays the signal
@@ -45,6 +46,11 @@
 // Drive (nd_drive.h) runs before the filter, at the same (over)sampled rate.
 // Its gain, compensation and wet share ramp linearly across each control
 // block, so automating drive does not zipper. Drive 0 is an exact bypass.
+// The drive's wet signal, C f(G x), goes through a one-pole DC blocker
+// (10 Hz, its pole set at note-on for the stage's rate) before it is mixed
+// with the dry: `tube` is asymmetric and makes DC (decided 2026-11-01). The
+// blocker runs whenever the drive does, so an undriven voice never runs it
+// and plays as before; the dry share is not filtered.
 //
 // Nothing here allocates: a VoiceFx lives inside the voice pool. Everything
 // it reads at run time (the drive tables, the oversampler's taps) is built at
@@ -66,12 +72,16 @@ struct VoiceFxParams {
     DriveCurve driveCurve = DriveCurve::Soft;
     double drive = 0.0;
     double driveMix = 1.0;
+    int oversample = 4;  ///< the zone's factor (2 or 4) if the drive is above zero at note-on
 };
 
 /// What every voice's stage shares, built at prepare (host thread).
 struct VoiceFxShared {
     double sampleRate = 48000.0;
-    int factor = 4;  ///< the oversampling factor of a voice with drive > 0 (2 or 4)
+    /// The kit bus's oversampling factor (DESIGN §3: as built, 4x). A voice
+    /// takes its own from its zone (VoiceFxParams::oversample, decided
+    /// 2026-11-01), not from here.
+    int factor = 4;
     bool adaa = true;  ///< antiderivative antialiasing where a curve allows it (nd_drive.h)
     DriveTables drive;
     OversamplerTaps taps;
@@ -92,7 +102,7 @@ public:
     /// life), reset the filters and the chain.
     void start(const VoiceFxParams& params, const VoiceFxShared& shared) {
         sh_ = &shared;
-        factor_ = (params.drive > 0.0) ? shared.factor : 1;
+        factor_ = (params.drive > 0.0) ? (params.oversample == 2 ? 2 : 4) : 1;
         fs_ = shared.sampleRate * factor_;
         type_ = params.filter;
         curve_ = params.driveCurve;
@@ -102,7 +112,9 @@ public:
             hpf_[c].reset();
             if (factor_ > 1) rs_[c].reset(&shared.taps, factor_);
             dc_[c] = DriveChannel{};
+            dcb_[c] = DcBlocker{};
         }
+        dcR_ = dcBlockerPole(fs_);
         first_ = true;
         drivePrev_ = DriveSetting{};
         driveNow_ = DriveSetting{};
@@ -236,8 +248,10 @@ private:
                 d.wet = drivePrev_.wet + (driveNow_.wet - drivePrev_.wet) * f;
             }
             for (int j = s * factor_; j < (s + 1) * factor_; ++j) {
-                bl[j] = driveShape(d, C, adaa, dc_[0], bl[j]);
-                br[j] = driveShape(d, C, adaa, dc_[1], br[j]);
+                const double wl = dcb_[0].process(driveWet(d, C, adaa, dc_[0], bl[j]), dcR_);
+                const double wr = dcb_[1].process(driveWet(d, C, adaa, dc_[1], br[j]), dcR_);
+                bl[j] += d.wet * (wl - bl[j]);
+                br[j] += d.wet * (wr - br[j]);
             }
         }
     }
@@ -276,6 +290,8 @@ private:
     HpfCascade hpf_[2];
     Resampler rs_[2];
     DriveChannel dc_[2];
+    DcBlocker dcb_[2];  // on the drive's wet signal (2026-11-01)
+    double dcR_ = 1.0;
     double gStart_ = 0.0, gTarget_ = 0.0;
     bool ramp_ = false, first_ = true;
     int pos_ = 0;  // samples (at the stage's rate) into the current control block

@@ -123,6 +123,7 @@ const char* const kModeNames[] = {"oneshot", "gated", "loop", "tempo-loop", "tem
 const char* const kTempoMethodNames[] = {"stretch", "resample"};
 const char* const kDriveCurveNames[] = {"soft", "tube", "hard", "fold"};
 const char* const kFilterNames[] = {"lp24", "lp12", "hp12", "hp24", "off"};  // append-only (R4)
+const char* const kOversampleNames[] = {"2", "4"};  // append-only (R4)
 const char* const kOutputNames[] = {"main", "aux1", "aux2", "aux3", "aux4", "aux5", "aux6", "aux7", "aux8"};
 
 const std::string& noText(const void*) {
@@ -216,6 +217,7 @@ const std::vector<ZoneParam>& zoneParams() {
         ND_NUM(Zone, choke, Int, 0, 127),
         ND_ENUM(Zone, output, kOutputNames),
         ND_NUM(Zone, pad, Int, -1, 127),
+        ND_ENUM(Zone, oversample, kOversampleNames),  // 2026-11-01 (DESIGN §3)
     };
     return t;
 }

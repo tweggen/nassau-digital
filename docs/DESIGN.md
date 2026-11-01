@@ -148,7 +148,9 @@ Per voice, one voice per sounding zone:
 
 * **Drive** before the filter **(decided)**: a waveshaper with input gain and a
   few curves (soft, tube, hard, fold) and output compensation, so turning it up
-  adds grit, not level. The shouted vocal.
+  adds grit, not level. The shouted vocal. **`tube` is asymmetric** (a biased
+  triode: even harmonics), and a driven voice's wet signal passes a **DC
+  blocker** (10 Hz) before it meets the dry **(decided 2026-11-01)**.
 * **Filter** with distortion inside it **(decided)**. **v1:** the 24 dB/oct
   ZDF low-pass ladder whose resonance feedback saturates and the 12 dB/oct
   low-pass SVF, both from nassau-analogue (`Source/DSP/synth_filter.h`), plus
@@ -168,8 +170,13 @@ Per voice, one voice per sounding zone:
   oversampled if its zone's drive is above zero **at note-on**; the decision
   holds for the life of the voice, so automating drive through zero never
   switches filter state inside a note. The kit bus oversamples while its drive
-  is above zero, ramped over one block. The factor (2× or 4×) is a measured
-  choice.
+  is above zero, ramped over one block. The factor is **a zone setting**,
+  `oversample` = 2 or 4, **default 4×** **(decided 2026-11-01)**; the kit bus
+  runs at 4×.
+* **What follows a sounding voice (decided 2026-11-01):** drive, cutoff and
+  resonance, glided to a new value over 16 control blocks (512 frames) so a
+  change is heard without a click; curve, filter type, mix, the oversampling
+  factor and every other zone parameter stay as at note-on.
 * **Sample reading** uses one interpolator for every pitch (a windowed sinc or
   a 4-point Hermite: a measured choice). An S950/SP-1200-style bit and rate
   reduction is a candidate for the Drive's curve list, not a separate stage.
@@ -216,11 +223,14 @@ ADSR plus hold, per zone. One-shot zones ignore note-off (§5).
 ### 4.2 Filter
 
 Type (`off` by default, decided 2026-10-27; §3), cutoff, resonance, key
-tracking, envelope amount.
+tracking, envelope amount. Cutoff and resonance follow a sounding voice; the
+type is latched at note-on (§3).
 
 ### 4.3 Drive
 
-Amount, curve, mix.
+Amount, curve, mix, and the oversampling factor of a driven voice (2× or 4×,
+default 4×; §3). The amount follows a sounding voice; curve, mix and factor are
+latched at note-on.
 
 ### 4.4 Modulation, fixed routes
 

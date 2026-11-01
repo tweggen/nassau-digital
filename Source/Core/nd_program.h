@@ -5,7 +5,7 @@
 //   Program   name, polyphony, kit-bus drive, output level, master tune, nextId
 //    └─ Zone × n      key × velocity rectangle, root key, play mode, drive,
 //        │            filter, envelopes, modulation routes, pan, level, tune,
-//        │            choke group, output, pad
+//        │            choke group, output, pad, oversampling
 //        └─ Layer × 1..4   sample reference, start/end, loop points, beats,
 //                          velocity window and fade, rrGroup, tune, level,
 //                          pan, reverse
@@ -54,6 +54,10 @@ enum class DriveCurve : int { Soft = 0, Tube, Hard, Fold };
 // Append-only (R4): Off was added after the four filters (DESIGN §3, decided
 // 2026-10-27), so the existing values keep their numbers.
 enum class FilterType : int { Lp24 = 0, Lp12, Hp12, Hp24, Off };
+// The oversampling factor of a driven voice (DESIGN §3, decided 2026-11-01:
+// a zone setting, 2x or 4x, default 4x), spelled "2" and "4". Append-only.
+enum class Oversampling : int { X2 = 0, X4 };
+inline int oversamplingFactor(Oversampling o) { return o == Oversampling::X2 ? 2 : 4; }
 
 /// Output of a zone: 0 = main, 1..8 = aux 1..8 (DESIGN §3.1).
 constexpr int kNumAuxOutputs = 8;
@@ -130,6 +134,10 @@ struct Zone {
     int choke = 0;                     ///< 0 = no choke group
     int output = 0;                    ///< 0 = main, 1..8 = aux
     int pad = -1;                      ///< pad assignment (DESIGN §7); -1 = none
+    /// The factor a voice of this zone runs its drive and filter at when its
+    /// drive is above zero at note-on (DESIGN §3); an undriven voice is not
+    /// oversampled whatever this says. Latched at note-on.
+    Oversampling oversample = Oversampling::X4;
     std::vector<Layer> layers;
     Extras extras;
 
