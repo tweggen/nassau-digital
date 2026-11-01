@@ -47,7 +47,7 @@
 // Its gain, compensation and wet share ramp linearly across each control
 // block, so automating drive does not zipper. Drive 0 is an exact bypass.
 // The drive's wet signal, C f(G x), goes through a one-pole DC blocker
-// (5 Hz, its pole set at note-on for the stage's rate) before it is mixed
+// (10 Hz, its pole set at note-on for the stage's rate) before it is mixed
 // with the dry: `tube` is asymmetric and makes DC (decided 2026-11-01). The
 // blocker runs whenever the drive does, so an undriven voice never runs it
 // and plays as before; the dry share is not filtered.

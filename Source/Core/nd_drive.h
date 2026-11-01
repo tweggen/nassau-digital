@@ -244,9 +244,10 @@ struct DcBlocker {
     }
 };
 
-/// The blocker's corner (Hz) and its pole at a rate: below the lowest note
-/// a drum kit plays, -0.07 dB at 40 Hz, -0.27 dB at 20 Hz.
-constexpr double kDcBlockerHz = 5.0;
+/// The blocker's corner (Hz; the author, 2026-11-01: 10 Hz, first built at
+/// 5) and its pole at a rate: -0.26 dB at 40 Hz, -0.97 dB at 20 Hz on the
+/// wet share (docs/GATES.md C5 measures it).
+constexpr double kDcBlockerHz = 10.0;
 inline double dcBlockerPole(double rate) {
     constexpr double kPi = 3.14159265358979323846;
     return std::exp(-2.0 * kPi * kDcBlockerHz / rate);

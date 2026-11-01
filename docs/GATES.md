@@ -353,12 +353,14 @@ antiderivative (it has a logarithm). C5.1's tone (1 kHz, −12 dBFS RMS,
 filter off) at drive 0.25 / 0.5 / 1: 2nd harmonic −15.8 / −10.5 / −13.8 dB,
 3rd −31.6 / −21.5 / −17.1 dB re the fundamental (soft at drive 1: 2nd
 −218.9). (At b = 0.5 the 3rd led at drive 1; at 0 dBFS input the 3rd leads,
-as an overdriven triode does.) *DC blocker*: a one-pole high-pass at 5 Hz on
+as an overdriven triode does.) *DC blocker*: a one-pole high-pass at 10 Hz on
 the drive's wet signal (its pole set at note-on for the stage's rate; the dry
 share is not filtered), run whenever the drive runs, so an undriven voice
 never runs it. The curve makes DC at −16.1 / −11.5 / −8.6 dB re the input;
-half a second in, the output's DC is −179.6 / −167.9 / −166.6 dB re the
-fundamental. *Oversampling is a zone attribute*, `oversample="2"` or `"4"`
+half a second in, the output's DC is −197.2 / −176.9 dB re the fundamental
+and, at drive 1, exactly 0 over the window. The blocker alone on a settled sine:
+−0.96 / −0.97 / −0.97 dB at 20 Hz and −0.26 dB at 40 Hz at 1× / 2× / 4× of
+48 kHz. *Oversampling is a zone attribute*, `oversample="2"` or `"4"`
 (an appended enum, default `"4"`, last in the zone table), latched at
 note-on; an undriven voice is not oversampled whatever it says. The C1
 writer writes it, defaults included; anything but 2 or 4 is refused; a
@@ -388,7 +390,7 @@ against the settled sound's −116.9 / −116.9 / −103.5 / −103.3 / −71.9 
 of 8 blocks measured +12.9 dB (drive) and of 1 block +48.3 dB. Curve, filter
 type and mix changed mid-note leave the sounding note byte-identical (cmp).
 *Moved numbers*, each from the new tube or the blocker, none relaxed:
-C5.1 worst 0.003 → 0.004 dB (fold, drive 0.75: the blocker's 5 Hz corner
+C5.1 worst 0.003 → 0.005 dB (fold, drive 0.75: the blocker's 10 Hz corner
 on the wet share); tube's compensation off the reference level at drive 1,
 −18 dBFS +3.86 → +2.82 dB, −6 dBFS −4.59 → −4.37 dB (a new curve). C5.3, lp24
 at 20 kHz, 4×: 44.1 kHz tube −84.1 → −84.3 dB; **48 kHz tube −82.8 dB at
@@ -396,8 +398,8 @@ at 20 kHz, 4×: 44.1 kHz tube −84.1 → −84.3 dB; **48 kHz tube −82.8 dB a
 harmonic, which folds onto fs/2; soft, hard and fold read −182 … −218, rounding
 noise from the blocker where they read exactly 0 before); the worst of the AC
 is now −82.8 dB (was −84.1). Filter off, reported: 48 kHz tube −70.0, 44.1
-kHz soft −133.8, tube −73.2, hard −103.6, fold −76.0 dB. C5.2, C5.4, C5.5, R8
-and R3 unchanged; nassau-dsp's filter_golden untouched. Each watched
+kHz soft −134.0, tube −73.2, hard −103.6, fold −76.0 dB. C5.2, C5.4, C5.5, R8
+and R3 unchanged; nassau-dsp's filter_golden untouched. (Every tube number above is the same at 5 and 10 Hz.) Each watched
 failing: the voice ignoring its zone's factor (2 checks), the default 2×
 (4 fx checks, 7 program checks), cutoff, resonance or drive not reaching the
 sounding voice (the follow check; drive also 3 C5.4 checks), mix following
@@ -413,6 +415,10 @@ cutoff moving 79.8; drive 0.5 soft filter off 2× 128.0, 4× 208.7; lp24 2×
 180.6, 4× 309.5, 4× cutoff moving 368.4; tube 4× lp24 289.6; four layers lp24
 163.0, driven 2× 275.6, 4× 406.6. No wall-clock assertion in the suite.
 The kit bus stays fixed `soft`, 4×, 47 frames late while on (as built).
+*The author's answers on this build, 2026-11-01*: the tube's C5.3 margin at
+48 kHz (−82.8 dB against −80) is **accepted**, b = 1 stays; the 512-frame
+glide is **accepted**; the DC blocker's corner is **10 Hz** (first built at
+5 Hz: DC −179.6 / −167.9 / −166.6 dB, −0.27 dB at 20 Hz, C5.1 worst 0.004).
 
 * **C5.1** Each drive curve's output RMS at moderate input stays within ± 1 dB
   of the input (output compensation).

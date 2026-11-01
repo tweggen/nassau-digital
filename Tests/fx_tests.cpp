@@ -479,8 +479,8 @@ int main(int argc, char** argv) {
         // C5.1's tone (1 kHz, -12 dBFS RMS) through each curve, filter off
         // (so nothing but the drive and the voice's DC blocker shapes it):
         // the 2nd and 3rd harmonic re the fundamental, and the DC left over a
-        // whole number of periods half a second in (the blocker's 5 Hz
-        // corner has a 32 ms time constant).
+        // whole number of periods half a second in (the blocker's 10 Hz
+        // corner has a 16 ms time constant).
         auto measure = [](DriveCurve c, double amount, double& h2, double& h3, double& dc) {
             Instrument inst;
             inst.prepare(kRate);
@@ -518,6 +518,28 @@ int main(int argc, char** argv) {
             evenLeads = evenLeads && h2 > h3 && h2 > -30.0;
             dcGone = dcGone && dc < -100.0;
             worstDc = std::max(worstDc, dc);
+        }
+        {
+            // The blocker's own response on the wet share, at the rates a
+            // voice runs it (1x, 2x, 4x of 48 kHz): a settled sine's gain.
+            std::string row;
+            for (double f : {20.0, 40.0}) {
+                for (int fac : {1, 2, 4}) {
+                    const double rate = kRate * fac, R = dcBlockerPole(rate);
+                    DcBlocker b;
+                    const int n = static_cast<int>(rate);  // 1 s: whole periods of 20 and 40 Hz
+                    double peakIn = 0, sumSq = 0;
+                    for (int i = 0; i < 2 * n; ++i) {
+                        const double x = std::sin(2.0 * kPi * f * i / rate);
+                        const double y = b.process(x, R);
+                        if (i >= n) sumSq += y * y;
+                        peakIn = std::max(peakIn, std::fabs(x));
+                    }
+                    row += fmt("  %.0f Hz", f) + " at " + std::to_string(fac) + "x " +
+                           fmt("%.2f dB", db(std::sqrt(2.0 * sumSq / n) / peakIn));
+                }
+            }
+            note(fmt("the DC blocker (%.0f Hz) on the wet share:", kDcBlockerHz) + row);
         }
         double s2 = 0, s3 = 0, sdc = 0;
         measure(DriveCurve::Soft, 1.0, s2, s3, sdc);

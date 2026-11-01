@@ -150,7 +150,7 @@ Per voice, one voice per sounding zone:
   few curves (soft, tube, hard, fold) and output compensation, so turning it up
   adds grit, not level. The shouted vocal. **`tube` is asymmetric** (a biased
   triode: even harmonics), and a driven voice's wet signal passes a **DC
-  blocker** (5 Hz) before it meets the dry **(decided 2026-11-01)**.
+  blocker** (10 Hz) before it meets the dry **(decided 2026-11-01)**.
 * **Filter** with distortion inside it **(decided)**. **v1:** the 24 dB/oct
   ZDF low-pass ladder whose resonance feedback saturates and the 12 dB/oct
   low-pass SVF, both from nassau-analogue (`Source/DSP/synth_filter.h`), plus
