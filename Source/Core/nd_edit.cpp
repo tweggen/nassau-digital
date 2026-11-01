@@ -176,8 +176,42 @@ EditResult restoreProgramParams(Program& prog, const std::vector<PriorValue>& pr
     return applyRestore(programParams(), targets, prior);
 }
 
+bool parseZoneScope(const std::string& text, ZoneScope& scope, std::string& error) {
+    if (text == "all") {
+        scope = ZoneScope::everyZone();
+        return true;
+    }
+    ZoneScope s;
+    size_t i = 0;
+    while (i < text.size()) {
+        if (text[i] == ' ' || text[i] == '\t') {
+            ++i;
+            continue;
+        }
+        size_t j = i;
+        while (j < text.size() && text[j] != ' ' && text[j] != '\t') ++j;
+        const std::string word = text.substr(i, j - i);
+        long long v = 0;
+        if (!parseInteger(word, v) || v < 1 || v > 0xFFFFFFFFll || word[0] == '+' || word[0] == '-') {
+            error = "zone: \"" + word + "\" is not a zone id";
+            return false;
+        }
+        const uint32_t id = static_cast<uint32_t>(v);
+        if (std::find(s.ids.begin(), s.ids.end(), id) == s.ids.end()) s.ids.push_back(id);
+        i = j;
+    }
+    if (s.ids.empty()) {
+        error = "zone: expected \"all\" or one or more zone ids";
+        return false;
+    }
+    scope = std::move(s);
+    return true;
+}
+
 uint32_t addZone(Program& prog, Zone zone) {
     if (static_cast<int>(zone.layers.size()) > kMaxLayers) return 0;
+    // The zone and its layers need 1 + n ids, all below the overlay range.
+    if (static_cast<uint64_t>(prog.nextId) + zone.layers.size() >= kOverlayIdFirst) return 0;
     zone.id = prog.nextId++;
     for (Layer& l : zone.layers) l.id = prog.nextId++;
     prog.zones.push_back(std::move(zone));
@@ -187,6 +221,7 @@ uint32_t addZone(Program& prog, Zone zone) {
 uint32_t addLayer(Program& prog, uint32_t zoneId, Layer layer) {
     Zone* z = prog.findZone(zoneId);
     if (!z || static_cast<int>(z->layers.size()) >= kMaxLayers) return 0;
+    if (prog.nextId >= kOverlayIdFirst) return 0;
     layer.id = prog.nextId++;
     z->layers.push_back(std::move(layer));
     return z->layers.back().id;

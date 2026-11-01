@@ -27,7 +27,7 @@ bool Zone::operator==(const Zone& o) const {
 bool Program::operator==(const Program& o) const {
     if (name != o.name || nextId != o.nextId || zones != o.zones || !(extras == o.extras)) return false;
     for (const auto& p : programParams())
-        if (p.kind != ParamKind::String && p.get(*this) != p.get(o)) return false;
+        if (p.kind == ParamKind::String ? p.getText(*this) != p.getText(o) : p.get(*this) != p.get(o)) return false;
     return true;
 }
 
@@ -268,6 +268,9 @@ const std::vector<ProgramParam>& programParams() {
         ND_NUM_AS(Program, "outputLevel6", auxOutputLevel[5], Real, -144, 24),
         ND_NUM_AS(Program, "outputLevel7", auxOutputLevel[6], Real, -144, 24),
         ND_NUM_AS(Program, "outputLevel8", auxOutputLevel[7], Real, -144, 24),
+        // The library's version (DESIGN §8, decided 2026-11-01). Written only
+        // when set: see programToXml().
+        ND_TEXT(Program, libraryVersion),
     };
     return t;
 }

@@ -70,13 +70,16 @@ ProgramParseResult programFromXml(const XmlNode& root) {
     if (!readAttributes(rootAttrs, programParams(), prog, prog.extras, false, r.error)) return r;
 
     std::set<uint32_t> ids;
-    uint32_t maxId = 0;
+    uint32_t maxId = 0;  // the highest id below the overlay range
     auto claim = [&](uint32_t id) {
         if (!ids.insert(id).second) {
             r.error = "id " + std::to_string(id) + " is used twice";
             return false;
         }
-        if (id > maxId) maxId = id;
+        // An id from the overlay range (a flattened program keeps its
+        // overlay's ids) does not move nextId: the program itself never hands
+        // one out (DESIGN §8).
+        if (id < kOverlayIdFirst && id > maxId) maxId = id;
         return true;
     };
 
@@ -111,6 +114,13 @@ ProgramParseResult programFromXml(const XmlNode& root) {
         r.error = "nextId: expected a positive integer, got \"" + *nextIdText + "\"";
         return r;
     }
+    if (next > static_cast<long long>(kOverlayIdFirst)) {
+        // nextId == kOverlayIdFirst is a program that has used up its range;
+        // beyond it, the program would hand out an overlay's ids.
+        r.error = "nextId: " + *nextIdText + " is in the range reserved for overlays (from " +
+                  std::to_string(kOverlayIdFirst) + ")";
+        return r;
+    }
     // A file whose nextId lags behind its own ids would hand out a used id;
     // never let that happen (DESIGN §2: ids are never reused).
     prog.nextId = static_cast<uint32_t>(next);
@@ -133,6 +143,16 @@ XmlNode programToXml(const Program& prog) {
     XmlNode root;
     root.name = kProgramElement;
     writeAttributes(root, programParams(), prog, Extras{});
+    // libraryVersion only when set: a program that is not a library has no
+    // version, and every program written before 2026-11-01 stays as it was.
+    if (prog.libraryVersion.empty()) {
+        for (auto it = root.attributes.begin(); it != root.attributes.end(); ++it) {
+            if (it->first == "libraryVersion") {
+                root.attributes.erase(it);
+                break;
+            }
+        }
+    }
     root.attributes.emplace_back("nextId", std::to_string(prog.nextId));
     for (const auto& a : prog.extras.attributes) root.attributes.push_back(a);
     for (const Zone& z : prog.zones) {

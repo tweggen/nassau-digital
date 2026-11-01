@@ -14,7 +14,9 @@
 //   remove  -> the removed object and where it was; reinsert() undoes it.
 //
 // Ids are handed out from Program::nextId and never reused (DESIGN §2):
-// removing the zone with the highest id does not lower nextId.
+// removing the zone with the highest id does not lower nextId. They are never
+// handed out from the range an overlay's own zones and layers take
+// (kOverlayIdFirst on, DESIGN §8): an add that would need one is refused.
 //
 // The textual syntax of a verb (`tune="+2"`, `zone="all"`) is the front end's
 // (qbx's .qxa verbs, DESIGN §9.3). Here a relative edit is explicit.
@@ -58,6 +60,12 @@ struct ZoneScope {
     static ZoneScope zones(std::vector<uint32_t> ids) { ZoneScope s; s.ids = std::move(ids); return s; }
 };
 
+/// Reads a verb's zone address as the command language writes it: "all", one
+/// id ("17"), or a list of ids separated by blanks ("3 5 7"; decided
+/// 2026-11-01, DESIGN §8). A repeated id is kept once. Refused (false, says
+/// why): empty, malformed, zero or an id beyond 32 bits.
+bool parseZoneScope(const std::string& text, ZoneScope& scope, std::string& error);
+
 /// One replaced value: the target's id (0 for the program itself), the
 /// parameter, and its previous absolute value as XML text.
 struct PriorValue {
@@ -87,9 +95,11 @@ EditResult restoreProgramParams(Program& prog, const std::vector<PriorValue>& pr
 
 /// Adds `zone` at the end, giving it and each of its layers a fresh id
 /// (whatever ids they carried are ignored). Returns the zone's id, 0 if
-/// refused (more than four layers).
+/// refused (more than four layers, or an id it would need is in the overlay
+/// range; nothing changes then).
 uint32_t addZone(Program& prog, Zone zone);
-/// Adds `layer` to the zone with a fresh id; 0 if the zone is missing or full.
+/// Adds `layer` to the zone with a fresh id; 0 if the zone is missing or full,
+/// or nextId has reached the overlay range.
 uint32_t addLayer(Program& prog, uint32_t zoneId, Layer layer);
 
 struct RemovedZone {

@@ -10,6 +10,10 @@ namespace {
 
 constexpr const char* kSetZone = "set-zone";
 constexpr const char* kSetLayer = "set-layer";
+constexpr const char* kSetProgram = "set-program";
+constexpr const char* kAddZone = "add-zone";
+constexpr const char* kAddLayer = "add-layer";
+constexpr const char* kHideZone = "hide-zone";
 constexpr const char* kWasSuffix = ".was";
 constexpr size_t kWasLength = 4;
 
@@ -40,7 +44,7 @@ template <typename T>
 bool storedParams(const XmlNode& verb, const char* addressAttr, const ParamDesc<T>* (*find)(const std::string&),
                   std::vector<StoredParam>& out, std::string& error) {
     for (const auto& a : verb.attributes) {
-        if (a.first == addressAttr || endsWithWas(a.first)) continue;
+        if ((addressAttr && a.first == addressAttr) || endsWithWas(a.first)) continue;
         const std::string* was = verb.attribute(a.first + kWasSuffix);
         if (!was) {
             error = a.first + ": no " + a.first + kWasSuffix + " (the value it replaces)";
@@ -100,9 +104,144 @@ std::vector<ParamEdit> asEdits(const std::vector<StoredParam>& params) {
     return out;
 }
 
+bool idInUse(const Program& prog, uint32_t id) {
+    return prog.findZone(id) != nullptr || prog.findLayer(id).second != nullptr;
+}
+
+OverlayEditReport refused(OverlayEditReport rep, const std::string& verb, const std::string& why) {
+    rep.state = OverlayEditState::Refused;
+    rep.error = "<" + verb + ">: " + why;
+    return rep;
+}
+
+// A stored zone address that the command language would expand: "all" or a
+// list ("3 5 7"). Expanded when the edit is made (DESIGN §8); stored, it
+// would also reach zones a later base adds, or address several targets with
+// one `.was`: refused, not guessed.
+bool needsExpansion(const std::string& target) {
+    return target == "all" || target.find_first_of(" \t") != std::string::npos;
+}
+
+// Reads the attributes of an add-zone / add-layer into `obj` through
+// `table`, skipping the addressing ones; unknown attributes are kept in
+// `extras` (R4), as the program reader keeps them. An added object replaces
+// nothing, so a `.was` is refused.
+template <typename T>
+bool readAdded(const XmlNode& verb, const std::vector<ParamDesc<T>>& table, const char* skip1, const char* skip2,
+               T& obj, Extras& extras, std::string& error) {
+    for (const auto& a : verb.attributes) {
+        if (a.first == skip1 || (skip2 && a.first == skip2)) continue;
+        if (endsWithWas(a.first)) {
+            error = a.first + ": an added object replaces nothing";
+            return false;
+        }
+        const ParamDesc<T>* p = nullptr;
+        for (const auto& d : table)
+            if (a.first == d.name) p = &d;
+        if (!p) {
+            extras.attributes.push_back(a);
+            continue;
+        }
+        if (!parseParam(*p, obj, a.second, error)) return false;
+    }
+    extras.children = verb.children;
+    return true;
+}
+
+// The id an add-zone / add-layer gives its object: from the overlay range,
+// and not one the base already has. A base never hands out an id from the
+// range (nd_edit, nd_program_xml), so a newer base that adds zones cannot
+// collide; a base that carries one anyway (a flattened program used as a
+// base) is told, not merged.
+bool addedId(const XmlNode& verb, const char* attr, const Program& prog, uint32_t& id, std::string& error) {
+    const std::string* t = verb.attribute(attr);
+    if (!t || !parseTargetId(*t, id)) {
+        error = std::string("needs ") + attr + "=\"ID\"";
+        return false;
+    }
+    if (id < kOverlayIdFirst) {
+        error = "id " + *t + " is not in the overlay range (from " + std::to_string(kOverlayIdFirst) + ")";
+        return false;
+    }
+    if (idInUse(prog, id)) {
+        error = "id " + *t + " is already in the base";
+        return false;
+    }
+    return true;
+}
+
+OverlayEditReport applyAddZone(Program& prog, const XmlNode& verb, OverlayEditReport rep) {
+    Zone z;
+    std::string why;
+    if (!addedId(verb, "zone", prog, z.id, why)) return refused(rep, verb.name, why);
+    if (!readAdded<Zone>(verb, zoneParams(), "zone", nullptr, z, z.extras, why)) return refused(rep, verb.name, why);
+    prog.zones.push_back(std::move(z));
+    return rep;
+}
+
+OverlayEditReport applyAddLayer(Program& prog, const XmlNode& verb, OverlayEditReport rep) {
+    Layer l;
+    std::string why;
+    const std::string* zt = verb.attribute("zone");
+    uint32_t zoneId = 0;
+    if (!zt || needsExpansion(*zt) || !parseTargetId(*zt, zoneId))
+        return refused(rep, verb.name, "needs zone=\"ID\", the zone it adds to");
+    if (!addedId(verb, "layer", prog, l.id, why)) return refused(rep, verb.name, why);
+    Zone* z = prog.findZone(zoneId);
+    if (!z) {
+        rep.state = OverlayEditState::Orphaned;
+        rep.missingId = zoneId;
+        return rep;
+    }
+    if (static_cast<int>(z->layers.size()) >= kMaxLayers)
+        return refused(rep, verb.name, "zone " + *zt + " already has " + std::to_string(kMaxLayers) + " layers");
+    if (!readAdded<Layer>(verb, layerParams(), "layer", "zone", l, l.extras, why)) return refused(rep, verb.name, why);
+    z->layers.push_back(std::move(l));
+    return rep;
+}
+
+OverlayEditReport applyHideZone(Program& prog, const XmlNode& verb, OverlayEditReport rep) {
+    const std::string* t = verb.attribute("zone");
+    uint32_t id = 0;
+    if (t && needsExpansion(*t)) return refused(rep, verb.name, "a zone list or \"all\" needs expansion into one hide-zone per zone");
+    if (!t || !parseTargetId(*t, id)) return refused(rep, verb.name, "needs zone=\"ID\"");
+    if (verb.attributes.size() != 1 || !verb.children.empty())
+        return refused(rep, verb.name, "takes zone=\"ID\" and nothing else");
+    if (!removeZone(prog, id).ok) {
+        rep.state = OverlayEditState::Orphaned;
+        rep.missingId = id;
+    }
+    return rep;
+}
+
+// set-program: the program's own attributes, `.was` beside each, never
+// orphaned (there is always a program). `version` and `libraryVersion` are
+// not an overlay's to edit (DESIGN §8).
+OverlayEditReport applySetProgram(Program& prog, const XmlNode& verb, OverlayEditReport rep) {
+    std::vector<StoredParam> params;
+    std::vector<OverlayDrift> drift;
+    std::string why;
+    if (!storedParams<Program>(verb, nullptr, &findProgramParam, params, why)) return refused(rep, verb.name, why);
+    for (const StoredParam& p : params)
+        if (p.attr == "version" || p.attr == "libraryVersion")
+            return refused(rep, verb.name, p.attr + " is not edited by an overlay");
+    if (!checkDrift<Program>(prog, params, &findProgramParam, drift, why)) return refused(rep, verb.name, why);
+    const EditResult r = setProgramParams(prog, asEdits(params));  // all-or-nothing
+    if (!r.ok) return refused(rep, verb.name, r.error);
+    if (!drift.empty()) {
+        rep.state = OverlayEditState::Drifted;
+        rep.drift = std::move(drift);
+    }
+    return rep;
+}
+
 OverlayEditReport applyOne(Program& prog, const XmlNode& verb, size_t index) {
     OverlayEditReport rep;
     rep.index = index;
+    if (verb.name == kSetProgram) return applySetProgram(prog, verb, rep);
+    if (verb.name == kAddZone) return applyAddZone(prog, verb, rep);
+    if (verb.name == kAddLayer) return applyAddLayer(prog, verb, rep);
+    if (verb.name == kHideZone) return applyHideZone(prog, verb, rep);
     const bool zone = verb.name == kSetZone;
     if (!zone && verb.name != kSetLayer) {
         rep.state = OverlayEditState::Unknown;
@@ -112,12 +251,13 @@ OverlayEditReport applyOne(Program& prog, const XmlNode& verb, size_t index) {
     const char* addr = zone ? "zone" : "layer";
     const std::string* target = verb.attribute(addr);
     uint32_t id = 0;
-    if (zone && target && *target == "all") {
-        // ALL is expanded into one set-zone per zone when the edit is made
-        // (DESIGN §8). A stored zone="all" would also reach zones a later
-        // base adds, with no value to compare against: refused, not guessed.
+    if (zone && target && needsExpansion(*target)) {
+        // ALL and zone lists are expanded into one set-zone per zone when the
+        // edit is made (DESIGN §8). Stored, ALL would also reach zones a
+        // later base adds with no value to compare against, and a list would
+        // share one `.was` among its zones: refused, not guessed.
         rep.state = OverlayEditState::Refused;
-        rep.error = "<set-zone zone=\"all\"> needs expansion into one set-zone per zone";
+        rep.error = "<set-zone zone=\"" + *target + "\"> needs expansion into one set-zone per zone";
         return rep;
     }
     if (!target || !parseTargetId(*target, id)) {
@@ -164,7 +304,7 @@ XmlNode makeVerb(const char* name, const char* addr, uint32_t id, const std::vec
                  const std::vector<std::string>& values, const std::vector<std::string>& was) {
     XmlNode v;
     v.name = name;
-    v.attributes.emplace_back(addr, std::to_string(id));
+    if (addr) v.attributes.emplace_back(addr, std::to_string(id));
     for (size_t i = 0; i < attrs.size(); ++i) {
         v.attributes.emplace_back(attrs[i], values[i]);
         v.attributes.emplace_back(attrs[i] + kWasSuffix, was[i]);
@@ -172,8 +312,30 @@ XmlNode makeVerb(const char* name, const char* addr, uint32_t id, const std::vec
     return v;
 }
 
+// Records the overlay's baseVersion with its first edit: the libraryVersion
+// of the base it is made on (`current` has the base's, since no overlay edit
+// can change it). An overlay that already has edits is not re-stamped: its
+// earlier edits were made on whatever it says, or on an unrecorded version.
+void stampBaseVersion(Overlay& overlay, const Program& current, RecordedEdit& rec) {
+    if (overlay.edits.empty() && overlay.baseVersion.empty() && !current.libraryVersion.empty()) {
+        overlay.baseVersion = current.libraryVersion;
+        rec.stampedBaseVersion = true;
+    }
+}
+
+// Appends a recorded edit's verbs to the overlay.
+void append(Overlay& overlay, const Program& current, RecordedEdit& rec, std::vector<XmlNode> verbs) {
+    stampBaseVersion(overlay, current, rec);
+    rec.ok = true;
+    rec.first = overlay.edits.size();
+    rec.count = verbs.size();
+    for (const XmlNode& v : verbs) overlay.edits.push_back(v);
+    rec.verbs = std::move(verbs);
+}
+
 template <typename T>
-RecordedEdit record(Overlay& overlay, Program& current, const std::vector<ParamEdit>& edits, const char* verbName,
+RecordedEdit record(Overlay& overlay, Program& current, const std::vector<ParamEdit>& edits, RecordedKind kind,
+                    const char* verbName,
                     const char* addr, const std::vector<ParamDesc<T>>& table, T* (*find)(Program&, uint32_t),
                     EditResult (*apply)(Program&, const std::vector<uint32_t>&, const std::vector<ParamEdit>&),
                     const std::vector<uint32_t>& ids) {
@@ -215,13 +377,9 @@ RecordedEdit record(Overlay& overlay, Program& current, const std::vector<ParamE
         }
         verbs.push_back(makeVerb(verbName, addr, id, attrs, values, was));
     }
-    rec.ok = true;
-    rec.first = overlay.edits.size();
-    rec.count = verbs.size();
-    for (const XmlNode& v : verbs) overlay.edits.push_back(v);
-    rec.verbs = std::move(verbs);
+    rec.kind = kind;
+    append(overlay, current, rec, std::move(verbs));
     rec.prior = r.prior;
-    rec.layers = std::string(verbName) == kSetLayer;
     current = std::move(next);
     return rec;
 }
@@ -230,6 +388,59 @@ Zone* findZoneIn(Program& p, uint32_t id) { return p.findZone(id); }
 Layer* findLayerIn(Program& p, uint32_t id) { return p.findLayer(id).second; }
 EditResult setZonesById(Program& p, const std::vector<uint32_t>& ids, const std::vector<ParamEdit>& e) {
     return setZones(p, ZoneScope::zones(ids), e);
+}
+Program* findProgramIn(Program& p, uint32_t) { return &p; }
+EditResult setProgramById(Program& p, const std::vector<uint32_t>&, const std::vector<ParamEdit>& e) {
+    return setProgramParams(p, e);
+}
+
+// The next id the overlay hands out: past its own nextId, past every id its
+// add verbs name (an overlay written by hand may lack nextId), and past every
+// overlay-range id the program already has (a flattened program used as a
+// base). Never below kOverlayIdFirst. 0 when the range is used up.
+uint32_t nextOverlayId(const Overlay& overlay, const Program& current) {
+    uint64_t n = std::max<uint64_t>(kOverlayIdFirst, overlay.nextId);
+    for (const XmlNode& v : overlay.edits) {
+        const char* attr = v.name == kAddZone ? "zone" : v.name == kAddLayer ? "layer" : nullptr;
+        uint32_t id = 0;
+        if (attr && v.attribute(attr) && parseTargetId(*v.attribute(attr), id)) n = std::max<uint64_t>(n, id + 1ull);
+    }
+    for (const Zone& z : current.zones) {
+        n = std::max<uint64_t>(n, z.id + 1ull);
+        for (const Layer& l : z.layers) n = std::max<uint64_t>(n, l.id + 1ull);
+    }
+    return n > 0xFFFFFFFFull ? 0 : static_cast<uint32_t>(n);
+}
+
+// The verb that adds `obj` under `id`: the addressing attributes, then every
+// attribute of the table as a program file writes it, then the object's
+// unknown attributes and children (R4).
+template <typename T>
+XmlNode addVerb(const char* name, const char* addr, uint32_t id, const char* parentAttr, uint32_t parent,
+                const std::vector<ParamDesc<T>>& table, const T& obj, const Extras& extras) {
+    XmlNode v;
+    v.name = name;
+    v.attributes.emplace_back(addr, std::to_string(id));
+    if (parentAttr) v.attributes.emplace_back(parentAttr, std::to_string(parent));
+    for (const auto& p : table) v.attributes.emplace_back(p.name, formatParam(p, obj));
+    for (const auto& a : extras.attributes) v.attributes.push_back(a);
+    v.children = extras.children;
+    return v;
+}
+
+// Applies freshly made structural verbs to a copy of `current` through the
+// same code applyOverlay() runs, so what is recorded is what plays. All of
+// them must apply; else nothing is recorded.
+bool applyStructural(const Program& current, const std::vector<XmlNode>& verbs, Program& next, std::string& error) {
+    next = current;
+    for (size_t i = 0; i < verbs.size(); ++i) {
+        const OverlayEditReport rep = applyOne(next, verbs[i], i);
+        if (rep.state != OverlayEditState::Applied) {
+            error = rep.error.empty() ? "<" + verbs[i].name + "> did not apply" : rep.error;
+            return false;
+        }
+    }
+    return true;
 }
 
 }  // namespace
@@ -267,6 +478,14 @@ OverlayParseResult overlayFromXml(const XmlNode& root) {
             o.base = a.second;
         } else if (a.first == "baseVersion") {
             o.baseVersion = a.second;
+        } else if (a.first == "nextId") {
+            long long v = 0;
+            if (!parseInteger(a.second, v) || v < kOverlayIdFirst || v > 0xFFFFFFFFll) {
+                r.error = "nextId: expected an id from " + std::to_string(kOverlayIdFirst) + " up, got \"" + a.second +
+                          "\"";
+                return r;
+            }
+            o.nextId = static_cast<uint32_t>(v);
         } else {
             o.attributes.push_back(a);
         }
@@ -292,6 +511,7 @@ XmlNode overlayToXml(const Overlay& o) {
     root.attributes.emplace_back("version", std::to_string(o.version));
     if (!o.base.empty()) root.attributes.emplace_back("base", o.base);
     if (!o.baseVersion.empty()) root.attributes.emplace_back("baseVersion", o.baseVersion);
+    if (o.nextId != 0) root.attributes.emplace_back("nextId", std::to_string(o.nextId));
     for (const auto& a : o.attributes) root.attributes.push_back(a);
     root.children = o.edits;
     return root;
@@ -302,14 +522,20 @@ std::string writeOverlay(const Overlay& o) { return writeXml(overlayToXml(o)); }
 OverlayResult applyOverlay(const Program& base, const Overlay& overlay) {
     OverlayResult r;
     r.program = base;  // the base itself is never written (DESIGN §8)
+    // Another library version still applies; it is reported (DESIGN §8).
+    if (!overlay.baseVersion.empty() && overlay.baseVersion != base.libraryVersion)
+        r.baseDrift.push_back({"libraryVersion", overlay.baseVersion, base.libraryVersion});
     for (size_t i = 0; i < overlay.edits.size(); ++i) r.edits.push_back(applyOne(r.program, overlay.edits[i], i));
     return r;
 }
 
 OverlayResult flatten(const Program& base, const Overlay& overlay) {
     // The program model has no reference to a base: the applied program is
-    // already one of your own.
-    return applyOverlay(base, overlay);
+    // already one of your own, except that it no longer is that library's
+    // version.
+    OverlayResult r = applyOverlay(base, overlay);
+    r.program.libraryVersion.clear();
+    return r;
 }
 
 RecordedEdit recordZoneEdit(Overlay& overlay, Program& current, const ZoneScope& scope,
@@ -321,24 +547,112 @@ RecordedEdit recordZoneEdit(Overlay& overlay, Program& current, const ZoneScope&
     } else {
         ids = scope.ids;
     }
-    return record<Zone>(overlay, current, edits, kSetZone, "zone", zoneParams(), &findZoneIn, &setZonesById, ids);
+    return record<Zone>(overlay, current, edits, RecordedKind::SetZone, kSetZone, "zone", zoneParams(), &findZoneIn, &setZonesById, ids);
 }
 
 RecordedEdit recordLayerEdit(Overlay& overlay, Program& current, const std::vector<uint32_t>& layerIds,
                              const std::vector<ParamEdit>& edits) {
-    return record<Layer>(overlay, current, edits, kSetLayer, "layer", layerParams(), &findLayerIn, &setLayers,
+    return record<Layer>(overlay, current, edits, RecordedKind::SetLayer, kSetLayer, "layer", layerParams(), &findLayerIn, &setLayers,
                          layerIds);
+}
+
+RecordedEdit recordProgramEdit(Overlay& overlay, Program& current, const std::vector<ParamEdit>& edits) {
+    for (const ParamEdit& e : edits) {
+        if (e.attr == "version" || e.attr == "libraryVersion") {
+            RecordedEdit rec;
+            rec.error = e.attr + " is not edited by an overlay";
+            return rec;
+        }
+    }
+    return record<Program>(overlay, current, edits, RecordedKind::SetProgram, kSetProgram, nullptr, programParams(),
+                           &findProgramIn, &setProgramById, {0});
+}
+
+RecordedEdit recordAddZone(Overlay& overlay, Program& current, Zone zone) {
+    RecordedEdit rec;
+    rec.kind = RecordedKind::AddZone;
+    if (static_cast<int>(zone.layers.size()) > kMaxLayers) {
+        rec.error = "a zone has at most " + std::to_string(kMaxLayers) + " layers";
+        return rec;
+    }
+    const uint32_t first = nextOverlayId(overlay, current);
+    if (first == 0 || 0xFFFFFFFFull - first < zone.layers.size() + 1) {
+        rec.error = "the overlay range is used up";
+        return rec;
+    }
+    std::vector<XmlNode> verbs;
+    verbs.push_back(addVerb<Zone>(kAddZone, "zone", first, nullptr, 0, zoneParams(), zone, zone.extras));
+    for (size_t i = 0; i < zone.layers.size(); ++i)
+        verbs.push_back(addVerb<Layer>(kAddLayer, "layer", first + 1 + static_cast<uint32_t>(i), "zone", first,
+                                       layerParams(), zone.layers[i], zone.layers[i].extras));
+    Program next;
+    if (!applyStructural(current, verbs, next, rec.error)) return rec;
+    rec.id = first;
+    append(overlay, current, rec, std::move(verbs));
+    overlay.nextId = first + 1 + static_cast<uint32_t>(zone.layers.size());
+    current = std::move(next);
+    return rec;
+}
+
+RecordedEdit recordAddLayer(Overlay& overlay, Program& current, uint32_t zoneId, Layer layer) {
+    RecordedEdit rec;
+    rec.kind = RecordedKind::AddLayer;
+    const uint32_t id = nextOverlayId(overlay, current);
+    if (id == 0 || id == 0xFFFFFFFFu) {
+        rec.error = "the overlay range is used up";
+        return rec;
+    }
+    std::vector<XmlNode> verbs{addVerb<Layer>(kAddLayer, "layer", id, "zone", zoneId, layerParams(), layer, layer.extras)};
+    Program next;
+    if (!current.findZone(zoneId)) {
+        rec.error = "no zone with id " + std::to_string(zoneId);
+        return rec;
+    }
+    if (!applyStructural(current, verbs, next, rec.error)) return rec;
+    rec.id = id;
+    append(overlay, current, rec, std::move(verbs));
+    overlay.nextId = id + 1;
+    current = std::move(next);
+    return rec;
+}
+
+RecordedEdit recordHideZone(Overlay& overlay, Program& current, uint32_t zoneId) {
+    RecordedEdit rec;
+    rec.kind = RecordedKind::HideZone;
+    Program next = current;
+    rec.hidden = removeZone(next, zoneId);  // for the undo: the zone and where it was
+    if (!rec.hidden.ok) {
+        rec.error = "no zone with id " + std::to_string(zoneId);
+        return rec;
+    }
+    XmlNode v;
+    v.name = kHideZone;
+    v.attributes.emplace_back("zone", std::to_string(zoneId));
+    if (!applyStructural(current, {v}, next, rec.error)) return rec;
+    rec.id = zoneId;
+    append(overlay, current, rec, {v});
+    current = std::move(next);
+    return rec;
 }
 
 bool undoRecordedEdit(Overlay& overlay, Program& current, const RecordedEdit& edit) {
     if (!edit.ok || overlay.edits.size() != edit.first + edit.count) return false;
     for (size_t i = 0; i < edit.count; ++i)
         if (overlay.edits[edit.first + i] != edit.verbs[i]) return false;
-    // The `.was` values written back, all or nothing.
+    // All or nothing: on a copy.
     Program prev = current;
-    const EditResult r = edit.layers ? restoreLayers(prev, edit.prior) : restoreZones(prev, edit.prior);
-    if (!r.ok) return false;
+    bool ok = false;
+    switch (edit.kind) {
+        case RecordedKind::SetZone: ok = restoreZones(prev, edit.prior).ok; break;   // the `.was` values
+        case RecordedKind::SetLayer: ok = restoreLayers(prev, edit.prior).ok; break;
+        case RecordedKind::SetProgram: ok = restoreProgramParams(prev, edit.prior).ok; break;
+        case RecordedKind::AddZone: ok = removeZone(prev, edit.id).ok; break;     // with its layers
+        case RecordedKind::AddLayer: ok = removeLayer(prev, edit.id).ok; break;
+        case RecordedKind::HideZone: ok = reinsertZone(prev, edit.hidden); break;
+    }
+    if (!ok) return false;
     overlay.edits.resize(edit.first);
+    if (edit.stampedBaseVersion) overlay.baseVersion.clear();
     current = std::move(prev);
     return true;
 }

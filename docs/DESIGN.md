@@ -401,6 +401,34 @@ not change, because every sampler meets them:
 * **Relative input is resolved when the edit is made** **(decided
   2026-10-27)**: `tune +2` is stored as its absolute new and previous values;
   the typed relative form is never stored.
+* **Library versions** **(decided 2026-11-01)**: a library names its version
+  in the append-only program attribute `libraryVersion` (text; written only
+  when set). The overlay's `baseVersion` is the base's `libraryVersion` when
+  the overlay was made, recorded with its first edit. Applied to a base of
+  another version, the overlay still applies and the mismatch is **reported**,
+  in the shape drift uses (`libraryVersion`, was, now); an overlay with no
+  `baseVersion` is not compared. A flattened program is no longer that
+  library, so it carries no `libraryVersion`.
+* **Zone lists are expanded when the edit is made** **(decided 2026-11-01)**:
+  `zone="3 5 7"` becomes one edit per zone, each with its own previous value,
+  like ALL; a base that lacks one of the zones orphans only that zone's edit.
+  A stored list (or `all`) is refused, not guessed.
+* **Program attributes are edited with `set-program`** **(the author's
+  decision of 2026-11-01)**: `attr`/`attr.was` pairs like `set-zone`, drift
+  reported the same way, never orphaned. Every program attribute but
+  `version` (the format's) and `libraryVersion` (the base's own; an overlay
+  that rewrote it would claim to be a version it is not).
+* **Structural edits** **(decided 2026-11-01)**: zones and layers an overlay
+  **adds** take ids from a **reserved range, 1,000,000 up**, which a program
+  never hands out (adding a zone that would need one is refused, and a file's
+  `nextId` may not enter it), so a newer base that adds zones never collides
+  with an overlay's. The overlay keeps its own `nextId` (never reused, as a
+  program's). Removing a **base zone** is a stored **hide**: the zone stays in
+  the base, the overlay's program does not have it, undo brings it back where
+  it was, and flatten drops it. A flattened program keeps its overlay's ids
+  (the round-robin choice hashes the zone id, so renumbering would change what
+  it plays); a base that carries one anyway has the colliding add refused and
+  reported.
 
 This is what Kontakt, Logic's Sampler and SFZ do implicitly (edits live in the
 instance; the library is untouched; "save as" writes a new file that refers to
@@ -551,6 +579,22 @@ layer, since ALL is expanded when the edit is made:
 </NassauDigitalOverlay>
 ```
 
+The verbs of 2026-11-01 (§8) are `set-program` (no address, `attr`/`attr.was`
+pairs), `add-zone` and `add-layer` (every attribute written, as in a program
+file; a zone the overlay adds is one `add-zone` followed by one `add-layer`
+per layer) and `hide-zone`; the overlay's own `nextId` is a root attribute,
+written once it has added something:
+
+```xml
+<NassauDigitalOverlay version="1" base="Library/Strings.ndp" baseVersion="3" nextId="1000003">
+  <set-program outputLevel="-6" outputLevel.was="0"/>
+  <add-zone zone="1000000" keyLo="42" keyHi="42" rootKey="42" ... />
+  <add-layer layer="1000001" zone="1000000" src="audio/d.wav" ... />
+  <add-layer layer="1000002" zone="9" src="audio/e.wav" ... />
+  <hide-zone zone="5"/>
+</NassauDigitalOverlay>
+```
+
 In Smaragd the program is stored in the project; export writes a program file
 plus an `audio/` folder.
 
@@ -653,3 +697,7 @@ GATES.md records as built):
   ids from a **reserved high range** a base never uses; removing a base zone is
   a stored "hide" edit.
 * **C8 orphans**: as built (reported per edit; flatten proceeds and drops them).
+* **C8 `set-program`**: program-level attributes are edited in an overlay by a
+  `set-program` verb with `attr`/`attr.was` pairs, like `set-zone`.
+
+The C8 items above are built (§8, §12; GATES.md C8, 2026-11-01).

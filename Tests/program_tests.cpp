@@ -248,10 +248,13 @@ int main() {
         std::string names;
         for (const auto& d : programParams()) names += std::string(names.empty() ? "" : " ") + d.name;
         note("program attributes: " + names);
+        // A prefix: what was appended after them (libraryVersion) follows.
+        const std::string prefix =
+            "version name polyphony busDrive outputLevel masterTune busDrive1 busDrive2 busDrive3 busDrive4 "
+            "busDrive5 busDrive6 busDrive7 busDrive8 outputLevel1 outputLevel2 outputLevel3 outputLevel4 "
+            "outputLevel5 outputLevel6 outputLevel7 outputLevel8";
         check("the table: version name polyphony busDrive outputLevel masterTune, then busDrive1..8, outputLevel1..8",
-              names == "version name polyphony busDrive outputLevel masterTune busDrive1 busDrive2 busDrive3 busDrive4 "
-                       "busDrive5 busDrive6 busDrive7 busDrive8 outputLevel1 outputLevel2 outputLevel3 outputLevel4 "
-                       "outputLevel5 outputLevel6 outputLevel7 outputLevel8");
+              names.compare(0, prefix.size(), prefix) == 0);
 
         // Missing = 0 (that bus off) and 0 dB; busDrive and outputLevel stay main's.
         const auto old = parseProgram("<NassauDigitalProgram version=\"1\" busDrive=\"0.5\" outputLevel=\"-3\"/>");
@@ -429,6 +432,77 @@ int main() {
         const auto bare = parseProgram("<NassauDigitalProgram/>");
         check("a bare program takes the defaults (polyphony 32, nextId 1)",
               bare.ok && bare.program.polyphony == 32 && bare.program.nextId == 1);
+    }
+
+    // ------------------------------------------------------ libraryVersion ---
+    group("libraryVersion (DESIGN §8, decided 2026-11-01): an appended program attribute");
+    {
+        const ProgramParam* lv = findProgramParam("libraryVersion");
+        check("the program table has it, last (appended), as text",
+              lv && lv == &programParams().back() && lv->kind == ParamKind::String);
+        const auto plain = parseProgram("<NassauDigitalProgram version=\"1\" name=\"Kit\"/>");
+        const std::string w = writeProgram(plain.program);
+        check("a program without one reads it empty and writes none (programs before 2026-11-01 keep their bytes)",
+              plain.ok && plain.program.libraryVersion.empty() && w.find("libraryVersion") == std::string::npos);
+        const auto lib = parseProgram("<NassauDigitalProgram version=\"1\" libraryVersion=\"3\"/>");
+        const std::string wl = writeProgram(lib.program);
+        const auto back = parseProgram(wl);
+        check("libraryVersion=\"3\" is read, written and read back equal, the bytes stable",
+              lib.ok && lib.program.libraryVersion == "3" && wl.find(" libraryVersion=\"3\"") != std::string::npos &&
+                  back.ok && back.program == lib.program && writeProgram(back.program) == wl);
+        Program other = lib.program;
+        other.libraryVersion = "4";
+        check("program equality notices libraryVersion (and name, the other text attribute)",
+              !(other == lib.program) && [&] { Program n = lib.program; n.name = "x"; return !(n == lib.program); }());
+    }
+
+    // ------------------------------------------------- the overlay id range ---
+    group("ids from 1000000 on are an overlay's (DESIGN §8, decided 2026-11-01): a program never hands one out");
+    {
+        check("kOverlayIdFirst is 1000000", kOverlayIdFirst == 1000000u);
+        Program p;
+        p.nextId = kOverlayIdFirst - 1;
+        const uint32_t last = addZone(p, Zone{});
+        const uint32_t past = addZone(p, Zone{});
+        check("addZone hands out 999999, then refuses (nextId 1000000, nothing added)",
+              last == kOverlayIdFirst - 1 && past == 0 && p.nextId == kOverlayIdFirst && p.zones.size() == 1);
+        check("addLayer refuses at the range too", addLayer(p, last, Layer{}) == 0 && p.zones[0].layers.empty());
+        Program q;
+        q.nextId = kOverlayIdFirst - 2;
+        Zone two;
+        two.layers.resize(2);
+        check("a zone needing ids 999998..1000000 is refused whole", addZone(q, two) == 0 && q.zones.empty() &&
+                                                                         q.nextId == kOverlayIdFirst - 2);
+        check("the reader refuses a nextId inside the range (1000001), accepts 1000000",
+              !parseProgram("<NassauDigitalProgram nextId=\"1000001\"/>").ok &&
+                  parseProgram("<NassauDigitalProgram nextId=\"1000000\"/>").ok);
+        // A flattened program keeps its overlay's ids: readable, and they do
+        // not pull nextId into the range.
+        const auto flat = parseProgram(
+            "<NassauDigitalProgram nextId=\"8\"><zone id=\"7\"/><zone id=\"1000000\"><layer id=\"1000001\"/></zone>"
+            "</NassauDigitalProgram>");
+        check("a program carrying overlay-range ids (a flattened one) reads; nextId stays 8",
+              flat.ok && flat.program.nextId == 8 && flat.program.findZone(1000000));
+        const auto lag = parseProgram("<NassauDigitalProgram nextId=\"2\"><zone id=\"1000005\"/><zone id=\"9\"/>"
+                                      "</NassauDigitalProgram>");
+        check("a lagging nextId is raised past the program's own ids only (9 -> 10), not past 1000005",
+              lag.ok && lag.program.nextId == 10);
+    }
+
+    group("zone lists (DESIGN §8, decided 2026-11-01): parseZoneScope");
+    {
+        ZoneScope s;
+        std::string err;
+        const bool list = parseZoneScope("3 5  7", s, err);
+        check("\"3 5  7\" is the zones 3, 5, 7", list && !s.all && s.ids == std::vector<uint32_t>({3, 5, 7}));
+        const bool rep = parseZoneScope("5 5 3", s, err);
+        check("a repeated id is kept once (\"5 5 3\" -> 5, 3)", rep && s.ids == std::vector<uint32_t>({5, 3}));
+        check("\"all\" and \"17\"", parseZoneScope("all", s, err) && s.all && parseZoneScope("17", s, err) &&
+                                       !s.all && s.ids == std::vector<uint32_t>({17}));
+        bool refusedAll = true;
+        for (const char* bad : {"", " ", "3,5", "0", "-3", "+3", "x", "3 all", "4294967296"})
+            refusedAll = refusedAll && !parseZoneScope(bad, s, err);
+        check("refused: empty, blank, \"3,5\", 0, -3, +3, x, \"3 all\", 2^32", refusedAll);
     }
 
     // ---------------------------------------------------------------- C1.3 ---
