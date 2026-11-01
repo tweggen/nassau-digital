@@ -183,13 +183,17 @@ and a snare can get its own reverb. NassauDigital has the same:
 * **Main**, a stereo pair, plus **eight aux outputs** **(decided: 8)**, each a
   stereo pair, so a stereo sample or a panned mono one keeps its image on an
   aux output as on main. Every zone has an `output` field: main or aux 1–8.
-* **Each output is a bus of its own** with its own sum and its own kit-bus
-  drive. A zone sent to an aux output does not also reach main, so the kick
-  that keys the ducking is not doubled in the mix.
+* **Each output is a bus of its own** with its own sum, its own kit-bus
+  drive and its own level (program attributes `busDrive1` … `busDrive8` and
+  `outputLevel1` … `outputLevel8` for aux 1–8; `busDrive` and `outputLevel`
+  are main's). A zone sent to an aux output does not also reach main, so the
+  kick that keys the ducking is not doubled in the mix.
 * **An aux output nobody listens to falls back to main.** qbx tells the
   instrument which outputs are routed (§9.1); a zone whose output is not routed
   plays through main, so a kit never goes silent because a return track is
   missing. Which outputs are routed is state, so renders stay deterministic.
+* **A routing change reaches new notes only**: a sounding voice keeps the
+  output it started on until it ends (settled 2026-11-01, §13).
 
 **In qbx this needs new work.** qbx already reports a plugin's extra output
 buses but routes only the first and drops the rest. Its multi-output design
