@@ -35,32 +35,37 @@
 // oversampled voice runs its layers and that stage `oversamplingLatency()`
 // frames ahead of its amp, so it lines up with one that is not.
 //
-// After every voice: the kit bus's drive (nd_kit_bus.h, the program's
-// busDrive), then the program's output level (DESIGN §3: Σ -> kit-bus drive
-// -> output).
+// After every voice: each output's kit bus's drive (nd_kit_bus.h), then that
+// output's level (DESIGN §3: Σ -> kit-bus drive -> output).
 //
 // Outputs (DESIGN §3.1). Main and kNumAuxOutputs aux outputs, each a stereo
-// pair and a bus of its own: its own sum and its own kit bus. A voice plays
-// on the output its zone names (Zone::output, latched at note-on like every
-// zone parameter but drive), and on no other. An aux output that is not
-// routed falls back to main: its voices are summed into main, in note-on
-// order among main's own, before main's kit bus, so main sounds exactly as
-// if those zones were set to main. Which aux outputs are routed is state
-// (setRoutedOutputs()); an output the host hands no buffer for counts as not
-// routed, whatever the mask says. A routing change while voices sound on the
-// output it moves is a crossfade of kRouteFadeFrames frames from the old
-// destination to the new, counted on the instrument's own frames (so the bytes
-// do not depend on the host's block size); a change asked for during a
-// crossfade starts when that one ends. An output with nothing sounding on it
-// switches at once, and so does reset(). The kit bus of an aux output runs
-// only while that output is fed (and for kRouteFadeFrames after, to let its
-// chain drain); otherwise it is at rest and costs nothing.
+// pair and a bus of its own: its own sum, its own kit bus and its own level.
+// A voice plays on one output, decided at its note-on: the aux output its
+// zone names (Zone::output) if that output is routed, main otherwise. An aux
+// output that is not routed falls back to main: its voices are summed into
+// main, in note-on order among main's own, before main's kit bus, so main
+// sounds exactly as if those zones were set to main. Which aux outputs are
+// routed is state (setRoutedOutputs()); an output the host hands no buffer
+// for counts as not routed, whatever the mask says.
 //
-// Bus drive per output: the program has one busDrive (DESIGN §12 names no
-// other), and every output's kit bus takes that amount, each on its own sum.
-// DESIGN §3.1 and §4.5 give each output its own kit-bus drive; the attribute
-// that would set an aux output's own amount is the author's to name (see the
-// C6 PR), and the runtime keeps one amount per output so it slots in there.
+// A routing change under a sounding voice (DESIGN §13, settled 2026-11-01):
+// the voice keeps the output it started on until it ends; only notes that
+// start after the change follow it. So a voice on an aux output that is then
+// unrouted keeps sounding there, into a buffer the host may no longer read
+// (accepted by the author), and a voice that fell back to main stays on main
+// when its aux output is routed. If the host hands no buffer for a voice's
+// output in some process() call, that voice's samples of that call are
+// dropped (rendered into scratch nothing reads, never through a null
+// pointer); the voice runs on, so it is where it would have been when the
+// buffer returns. The kit bus of an aux output runs while that output has a
+// buffer and is routed or still carries a voice (and for 256 frames after,
+// to let its chain drain); otherwise it is at rest and costs nothing.
+//
+// Bus drive and level per output (DESIGN §13, settled 2026-11-01): main's
+// are the program's busDrive and outputLevel, aux k's are busDrive<k> and
+// outputLevel<k> (0 = off and 0 dB when missing). An output's amount drives
+// that output's sum and nothing else; a voice that fell back to main takes
+// main's.
 //
 // Tempo (DESIGN §5). A resample tempo mode is one more factor in the read
 // rate, songTempo / layerTempo, applied per control block (setTempo()).
@@ -187,16 +192,20 @@ public:
 
     /// Main plus the aux outputs (DESIGN §3.1, decided: 8 aux pairs).
     static constexpr int kNumOutputs = 1 + kNumAuxOutputs;
-    /// The crossfade when a routing change moves sounding voices to another
-    /// output, in frames.
+    /// DEPRECATED, unused since 2026-11-01: was the crossfade when a routing
+    /// change moved sounding voices to another output. A sounding voice now
+    /// keeps the output it started on (DESIGN §13), so there is no crossfade.
+    /// Kept so code naming it still compiles (the API is append-only).
     static constexpr int kRouteFadeFrames = 256;
 
     /// Which aux outputs are routed: bit k = aux k + 1 (bits above aux 8 are
     /// ignored), the layout of qbx's twSamplerHost::setRoutedOutputs (qbx's
     /// twPlugin::setRoutedOutBuses numbers the buses with main as bit 0: its
     /// mask >> 1 is this one). A zone whose aux output is not routed plays
-    /// through main (DESIGN §3.1). Taken at the next process(); 0 (nothing
-    /// routed) until set. Allocation-free; call it between process() calls.
+    /// through main (DESIGN §3.1). Taken at the next process() by the notes
+    /// that start from then on; a sounding voice keeps the output it started
+    /// on (DESIGN §13). 0 (nothing routed) until set. Allocation-free; call it
+    /// between process() calls.
     void setRoutedOutputs(uint32_t mask);
     uint32_t routedOutputs() const;
 

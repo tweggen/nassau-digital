@@ -5,12 +5,15 @@
 // C6.2 the same zone with aux 3 not routed plays through main, and the main
 //      render equals the render of the program with that zone set to main
 //      (cmp).
-// C6.3 each output's own bus drive affects only that output.
-// Plus: a routing change while the zone sounds does not click and loses
-// nothing (the sum of main and aux 3 stays the signal); R3 (no allocation in
-// process() or setRoutedOutputs() across routing changes and every output's
-// bus); R8 (byte-identical across reset and block sizes with routing changes
-// mid-render); and, with --bench, what the outputs cost.
+// C6.3 each output's own bus drive affects only that output (busDrive is
+//      main's, busDrive1..8 aux 1..8's; likewise outputLevel, outputLevel1..8).
+// Plus: a routing change under a sounding voice leaves the voice on the
+// output it started on, and only later notes follow it (DESIGN §13, settled
+// 2026-11-01); a voice whose output the host stops handing a buffer for is
+// dropped there, not moved and not written through null; R3 (no allocation
+// in process() or setRoutedOutputs() across routing changes, buffer layouts
+// and every output's bus); R8 (byte-identical across reset and block sizes
+// with routing changes mid-render); and, with --bench, what the outputs cost.
 //
 // Everything is measured on audio through the public API (R6), with the
 // nine-output process() qbx's outBuses layout maps onto.
@@ -50,10 +53,13 @@ struct Outs {
     }
 };
 
-// A routing change the host makes between two process() calls, at `frame`.
+// A routing change the host makes between two process() calls, at `frame`:
+// the mask, and from then on the aux outputs it hands a null buffer for
+// (bit k = aux k + 1, on top of the layout's).
 struct Change {
     int64_t frame;
     uint32_t mask;
+    uint32_t absent = 0;
 };
 
 // How the host hands the outputs over: `numBuses` entries of the bus array,
@@ -70,8 +76,13 @@ struct Layout {
 void renderOutsInto(Instrument& inst, const std::vector<Note>& notes, int64_t frames, Outs& out,
                     std::vector<Event>& ev, int block, const std::vector<Change>& changes, Layout layout) {
     size_t next = 0, nextChange = 0;
+    uint32_t absent = layout.absent;
     for (int64_t b = 0; b < frames;) {
-        while (nextChange < changes.size() && changes[nextChange].frame <= b) inst.setRoutedOutputs(changes[nextChange++].mask);
+        while (nextChange < changes.size() && changes[nextChange].frame <= b) {
+            inst.setRoutedOutputs(changes[nextChange].mask);
+            absent = layout.absent | changes[nextChange].absent;
+            ++nextChange;
+        }
         int64_t end = std::min<int64_t>(b + block, frames);
         if (nextChange < changes.size()) end = std::min(end, changes[nextChange].frame);
         const int n = static_cast<int>(end - b);
@@ -93,7 +104,7 @@ void renderOutsInto(Instrument& inst, const std::vector<Note>& notes, int64_t fr
             for (int k = 0; k < kOuts; ++k) {
                 ch[k][0] = out.l[k].data() + b;
                 ch[k][1] = out.r[k].data() + b;
-                buses[k] = (k > 0 && (layout.absent & (1u << (k - 1)))) ? nullptr : ch[k];
+                buses[k] = (k > 0 && (absent & (1u << (k - 1)))) ? nullptr : ch[k];
             }
             inst.process(b, ev.data(), static_cast<int>(ev.size()), buses, layout.numBuses, n);
         }
@@ -136,13 +147,6 @@ double toneAmp(const std::vector<float>& v, size_t from, size_t to, double freq)
     }
     const double re = s1 - s2 * std::cos(w), im = s2 * std::sin(w);
     return 2.0 * std::sqrt(re * re + im * im) / static_cast<double>(to - from);
-}
-
-// Largest sample-to-sample step of v in [from, to).
-double maxStep(const std::vector<float>& v, size_t from, size_t to) {
-    double m = 0;
-    for (size_t i = std::max<size_t>(from, 1); i < to; ++i) m = std::max(m, std::fabs(double(v[i]) - v[i - 1]));
-    return m;
 }
 
 // A one-key looping zone playing its sample at its own pitch, velocity-
@@ -290,134 +294,228 @@ int main(int argc, char** argv) {
     }
 
     // ---------------------------------------------------------------- C6.3 ---
-    group("C6.3 each output's bus drive affects only that output");
+    group("C6.3 each output's bus drive affects only that output (busDrive main's, busDrive3 aux 3's)");
     {
-        // The program has one busDrive, which every output's bus takes (the
-        // per-output amount waits on the author: see the C6 PR). What is
-        // gated: each output's bus drives its own sum and nothing else.
-        const double busDrive = 0.5;
-        Rig both(twoZones(3, busDrive), kAux3);
+        // Main's bus at 0.2, aux 3's at 0.7, and aux 5's at 0.9 with nothing
+        // on aux 5. What is gated: each output's sum goes through its own
+        // amount and no other, and an amount moves nothing but its output.
+        const double mainDrive = 0.2, aux3Drive = 0.7;
+        auto prog = [&](int outB, double dMain, double d3) {
+            Program p = twoZones(outB, dMain);
+            p.auxBusDrive[2] = d3;   // busDrive3
+            p.auxBusDrive[4] = 0.9;  // busDrive5: nothing plays there
+            return p;
+        };
+        Rig both(prog(3, mainDrive, aux3Drive), kAux3);
         const Outs o = renderOuts(both.inst, {on(0, 60), on(0, 62)}, 48000);
-        const bool aux3Bus = both.inst.kitBusOversampling(3);
+        const bool aux3Bus = both.inst.kitBusOversampling(3), mainBus = both.inst.kitBusOversampling(0);
         bool othersRest = true;
         for (int b = 1; b < kOuts; ++b)
             if (b != 3) othersRest = othersRest && !both.inst.kitBusOversampling(b);
-        Rig aRig(twoZones(3, busDrive), kAux3);
+        // A alone on main at main's amount; B alone on MAIN at aux 3's amount.
+        Rig aRig(prog(0, mainDrive, 0.0), 0);
         const Outs a = renderOuts(aRig.inst, {on(0, 60)}, 48000);
-        Rig bRig(twoZones(3, busDrive), kAux3);
-        const Outs bo = renderOuts(bRig.inst, {on(0, 62)}, 48000);
-        Rig bMain(twoZones(0, busDrive), 0);
-        const Outs bm = renderOuts(bMain.inst, {on(0, 62)}, 48000);
-        Rig shared(twoZones(3, busDrive), 0);  // aux 3 unrouted: both on main's bus
+        Rig bRig(prog(0, aux3Drive, 0.0), 0);
+        const Outs bm = renderOuts(bRig.inst, {on(0, 62)}, 48000);
+        // B alone on main at MAIN's amount: what aux 3 would carry if it took
+        // main's amount (the C6 build before 2026-11-01).
+        Rig bMainDrive(prog(0, mainDrive, 0.0), 0);
+        const Outs bWrong = renderOuts(bMainDrive.inst, {on(0, 62)}, 48000);
+        // Each amount moved alone: the other output stays byte for byte.
+        Rig mainMoved(prog(3, 0.45, aux3Drive), kAux3);
+        const Outs om = renderOuts(mainMoved.inst, {on(0, 60), on(0, 62)}, 48000);
+        Rig auxMoved(prog(3, mainDrive, 0.35), kAux3);
+        const Outs oa = renderOuts(auxMoved.inst, {on(0, 60), on(0, 62)}, 48000);
+        Rig shared(prog(3, mainDrive, aux3Drive), 0);  // aux 3 unrouted: both on main's bus
         const Outs s = renderOuts(shared.inst, {on(0, 60), on(0, 62)}, 48000);
+        Rig sharedRef(prog(0, mainDrive, 0.0), 0);
+        const Outs sr = renderOuts(sharedRef.inst, {on(0, 60), on(0, 62)}, 48000);
 
         const size_t from = 9600, to = 9600 + 38400;  // whole periods of 500 Hz, 1, 1.5 and 2 kHz
         auto im = [&](const Outs& x, int b, double ref) {
             const double r = toneAmp(x.l[b], from, to, ref);
             return std::max(db(toneAmp(x.l[b], from, to, 500.0) / r), db(toneAmp(x.l[b], from, to, 2000.0) / r));
         };
+        auto maxDiff = [](const std::vector<float>& x, const std::vector<float>& y) {
+            double d = 0;
+            for (size_t i = 0; i < x.size(); ++i) d = std::max(d, std::fabs(double(x[i]) - y[i]));
+            return d;
+        };
         const double imMain = im(o, 0, 1000.0), imAux = im(o, 3, 1500.0), imShared = im(s, 0, 1000.0);
-        note(fmt("busDrive %.1f on every output; ", busDrive) + fmt("A on main, B on aux 3: intermodulation (500 Hz, 2 kHz) on main %.1f dB, ", imMain) +
+        const double wrongBy = maxDiff(o.l[3], bWrong.l[0]), movedMain = maxDiff(om.l[0], o.l[0]),
+                     movedAux = maxDiff(oa.l[3], o.l[3]);
+        note(fmt("busDrive %.1f, ", mainDrive) + fmt("busDrive3 %.1f, busDrive5 0.9; ", aux3Drive) +
+             fmt("A on main, B on aux 3: intermodulation (500 Hz, 2 kHz) on main %.1f dB, ", imMain) +
              fmt("on aux 3 %.1f dB; ", imAux) + fmt("both on main's bus (aux 3 unrouted) %.1f dB", imShared));
-        check("main is exactly A driven alone (cmp): B's output does not reach main's bus", sameOut(o, 0, a, 0));
-        check("aux 3 is exactly B driven alone (cmp): A's output does not reach aux 3's bus", sameOut(o, 3, bo, 3));
-        check("aux 3's bus drives B as main's bus would (aux 3 == B alone on main, cmp)", sameOut(o, 3, bm, 0));
+        note(fmt("aux 3 against B driven at main's amount instead: up to %.4f apart; ", wrongBy) +
+             fmt("busDrive 0.2 -> 0.45 moves main by up to %.4f, ", movedMain) +
+             fmt("busDrive3 0.7 -> 0.35 moves aux 3 by up to %.4f", movedAux));
+        check("main is exactly A driven alone at busDrive (cmp): B's output does not reach main's bus", sameOut(o, 0, a, 0));
+        check("aux 3 is exactly B driven at busDrive3 (== B alone on main with busDrive 0.7, cmp)", sameOut(o, 3, bm, 0));
+        check("...which is not B driven at main's amount (differs by more than 0.01)", wrongBy > 0.01);
+        check("busDrive moved alone: aux 3 byte-identical, main changed",
+              sameOut(om, 3, o, 3) && movedMain > 0.01);
+        check("busDrive3 moved alone: main byte-identical, aux 3 changed",
+              sameOut(oa, 0, o, 0) && movedAux > 0.01);
         check("no intermodulation across outputs (below -120 dB on main and on aux 3)", imMain < -120.0 && imAux < -120.0);
         check("...where one shared bus would intermodulate (above -60 dB)", imShared > -60.0);
-        check("aux 3's bus runs its drive; the buses of aux outputs nothing feeds are at rest", aux3Bus && othersRest);
+        check("aux 3 unrouted: B falls back to main and takes main's amount (== both on main, cmp)", sameOut(s, 0, sr, 0));
+        check("main's and aux 3's buses run their drive; the others (aux 5 at 0.9 with nothing on it) are at rest",
+              mainBus && aux3Bus && othersRest);
 
-        // Bus drive 0 leaves every output exact: the driven render differs
-        // from the undriven one on both outputs, so the drive is applied on aux 3
-        // (not only on main).
-        Rig dry(twoZones(3, 0.0), kAux3);
+        // A missing busDrive<k> is 0: aux 3 at busDrive3 0 is B undriven,
+        // while main's bus is on.
+        Rig dry(prog(3, mainDrive, 0.0), kAux3);
         const Outs d = renderOuts(dry.inst, {on(0, 60), on(0, 62)}, 48000);
-        Rig dryB(twoZones(0, 0.0), 0);
+        Rig dryB(prog(0, 0.0, 0.0), 0);
         const Outs dbm = renderOuts(dryB.inst, {on(0, 62)}, 48000);
-        check("busDrive 0: aux 3 is B undriven (== B alone on main, cmp), and driving changes aux 3",
-              sameOut(d, 3, dbm, 0) && !sameOut(d, 3, o, 3));
+        check("busDrive3 0 (the default): aux 3 is B undriven (== B alone on main, no bus drive, cmp) while main's bus drives",
+              sameOut(d, 3, dbm, 0) && dry.inst.kitBusOversampling(0));
+    }
+    group("C6 each output's own level (outputLevel main's, outputLevel3 aux 3's)");
+    {
+        auto prog = [](int outB, double lMain, double l3) {
+            Program p = twoZones(outB, 0.0);
+            p.outputLevel = lMain;
+            p.auxOutputLevel[2] = l3;  // outputLevel3
+            return p;
+        };
+        Rig both(prog(3, -3.0, -9.0), kAux3);
+        const Outs o = renderOuts(both.inst, {on(0, 60), on(0, 62)}, 24000);
+        Rig aRef(prog(0, -3.0, 0.0), 0);
+        const Outs a = renderOuts(aRef.inst, {on(0, 60)}, 24000);
+        Rig bRef(prog(0, -9.0, 0.0), 0);
+        const Outs b = renderOuts(bRef.inst, {on(0, 62)}, 24000);
+        Rig b0(prog(0, 0.0, 0.0), 0);
+        const Outs bz = renderOuts(b0.inst, {on(0, 62)}, 24000);
+        Rig aux3Moved(prog(3, -3.0, 4.0), kAux3);
+        const Outs om = renderOuts(aux3Moved.inst, {on(0, 60), on(0, 62)}, 24000);
+        Rig fallback(prog(3, -3.0, -9.0), 0);
+        const Outs fb = renderOuts(fallback.inst, {on(0, 62)}, 24000);
+        Rig fbRef(prog(0, -3.0, 0.0), 0);
+        const Outs fr = renderOuts(fbRef.inst, {on(0, 62)}, 24000);
+        const double ratio = db(rms(o.l[3], 0, 24000) / rms(bz.l[0], 0, 24000));
+        note(fmt("outputLevel -3, outputLevel3 -9: aux 3 RMS %.2f dB re B at 0 dB", ratio));
+        check("main is A at outputLevel (cmp); aux 3 is B at outputLevel3 (== B on main at -9 dB, cmp)",
+              sameOut(o, 0, a, 0) && sameOut(o, 3, b, 0));
+        check("aux 3 is 9 dB down (+- 0.01 dB)", std::fabs(ratio + 9.0) < 0.01);
+        check("outputLevel3 moved alone: main byte-identical", sameOut(om, 0, o, 0) && !sameOut(om, 3, o, 3));
+        check("aux 3 unrouted: B falls back to main at main's level (cmp)", sameOut(fb, 0, fr, 0));
+        check("outputLevel3 0 dB (the default): aux 3 is B as on main at 0 dB (cmp)", [&] {
+            Rig r(prog(3, -3.0, 0.0), kAux3);
+            const Outs x = renderOuts(r.inst, {on(0, 62)}, 24000);
+            return sameOut(x, 3, bz, 0);
+        }());
     }
 
     // ----------------------------------------------------- routing changes ---
-    group("Routing changes while the zone sounds: no click, nothing lost, nothing allocated");
+    group("Routing changes under a sounding voice: it keeps its output, later notes follow (DESIGN §13)");
     {
-        // B (key 62, a 220 Hz sine, 0.3) on aux 3. Routed from the start,
-        // unrouted at c1, routed again at c2. Both changes fall on a crest of
-        // the tone (55.25 and 110.25 periods in), where a hard switch is a
-        // step of the tone's full amplitude; on a zero crossing it would not
-        // show.
-        const size_t c1 = 12055, c2 = 24055;
-        auto prog = [](int outB, double busDrive) { return twoZones(outB, busDrive); };
-        const std::vector<Note> notes = {on(0, 62)};
-        for (double busDrive : {0.0, 0.5}) {
-            Rig rig(prog(3, busDrive), kAux3, 220.0, 0.3);
-            const Outs o = renderOuts(rig.inst, notes, 36000, 256, {{int64_t(c1), 0}, {int64_t(c2), kAux3}});
-            Rig refRig(prog(0, busDrive), 0, 220.0, 0.3);
-            const Outs ref = renderOuts(refRig.inst, notes, 36000);
-            const double own = maxStep(ref.l[0], 2000, 11000);
-            const double m1 = maxStep(o.l[0], c1 - 100, c1 + 600), a1 = maxStep(o.l[3], c1 - 100, c1 + 600);
-            const double m2 = maxStep(o.l[0], c2 - 100, c2 + 600), a2 = maxStep(o.l[3], c2 - 100, c2 + 600);
-            const double worst = std::max({m1, a1, m2, a2});
-            note(fmt("busDrive %.1f: largest step, the tone's own ", busDrive) + fmt("%.5f; ", own) + fmt("unrouting: main %.5f, ", m1) +
-                 fmt("aux 3 %.5f; ", a1) + fmt("routing again: main %.5f, ", m2) + fmt("aux 3 %.5f", a2) +
-                 fmt(" (worst %.2fx the tone's own)", worst / own));
-            check(fmt("busDrive %.1f: no click on main or aux 3 (no step above 1.5x the tone's own)", busDrive),
-                  worst < 1.5 * own);
-            if (busDrive == 0.0) {
-                // Nothing lost or doubled: main + aux 3 is the signal throughout.
-                double dev = 0;
-                for (size_t i = 0; i < 36000; ++i) {
-                    dev = std::max(dev, std::fabs(double(o.l[0][i]) + o.l[3][i] - ref.l[0][i]));
-                    dev = std::max(dev, std::fabs(double(o.r[0][i]) + o.r[3][i] - ref.r[0][i]));
-                }
-                note(fmt("main + aux 3 against the zone on main: largest difference %.2e", dev));
-                check("main + aux 3 is the signal across both changes (within 1e-6)", dev < 1e-6);
-                // Frames [c1, c1 + f) crossfade; the last of them already
-                // gives the old output weight 0.
-                const size_t f = Instrument::kRouteFadeFrames;
-                check(fmt("the crossfade lasts %.0f frames: aux 3 sounds until the fade's last frame, then is silent, "
-                          "and main is the zone on main (cmp)", double(f)),
-                      !silent(o, 3, c1 + f - 2, c1 + f - 1) && silent(o, 3, c1 + f - 1, c2) &&
-                          sameOut(o, 0, ref, 0, c1 + f, c2));
-                check("...and back: main silent, aux 3 the zone (cmp)",
-                      silent(o, 0, c2 + f, 36000) && sameOut(o, 3, ref, 0, c2 + f, 36000));
-            }
-        }
-
-        // A change asked for during a crossfade starts when it ends.
+        // B (key 62, a 220 Hz sine, 0.3) and C (key 64, the same 220 Hz
+        // sine) both on aux 3. B starts at 0; the routing changes at c1;
+        // C starts at c1 + 1000, after it. Bus drives on everywhere they
+        // matter (main 0.3, aux 3 0.5), so a voice that kept its output also
+        // kept its bus.
+        const size_t c1 = 12055;
+        const int64_t cOn = int64_t(c1) + 1000;
+        auto prog = [](int outB, int outC) {
+            Program p = twoZones(outB, 0.3);
+            p.auxBusDrive[2] = 0.5;
+            p.outputLevel = -1.0;
+            p.auxOutputLevel[2] = -2.0;
+            addZone(p, keyZone(64, outC));
+            return p;
+        };
+        auto make = [&](int outB, int outC, uint32_t mask) {
+            auto r = std::make_unique<Instrument>();
+            r->prepare(kRate);
+            const Program p = prog(outB, outC);
+            installTwo(*r, p, 220.0, 0.3);
+            r->setSample(p.zones[2].layers[0].id, Sample::mono(kRate, sine(220.0, kRate, 1.0, 0.3)));
+            r->setRoutedOutputs(mask);
+            r->reset();
+            return r;
+        };
+        const std::vector<Note> notes = {on(0, 62), on(cOn, 64)};
+        const int64_t frames = 36000;
         {
-            Rig rig(prog(3, 0.0), kAux3, 220.0, 0.3);
-            const Outs o = renderOuts(rig.inst, notes, int64_t(c2), 256, {{int64_t(c1), 0}, {int64_t(c1) + 100, kAux3}});
-            Rig refRig(prog(0, 0.0), 0, 220.0, 0.3);
-            const Outs ref = renderOuts(refRig.inst, notes, int64_t(c2));
-            const size_t f = Instrument::kRouteFadeFrames;
-            const double own = maxStep(ref.l[0], 2000, 11000);
-            const double worst = std::max(maxStep(o.l[0], c1 - 100, c1 + 800), maxStep(o.l[3], c1 - 100, c1 + 800));
-            check("routed again during the crossfade: the fade back starts at its end (main has the zone on the fade's last "
-                  "frame, aux 3 alone from two fades in, cmp)",
-                  std::fabs(double(o.l[0][c1 + f - 1]) - ref.l[0][c1 + f - 1]) < 1e-6 &&
-                      silent(o, 0, c1 + 2 * f, c2) && sameOut(o, 3, ref, 0, c1 + 2 * f, c2));
-            check("...without a click (no step above 1.5x the tone's own)", worst < 1.5 * own);
+            // Routed, then unrouted at c1.
+            auto inst = make(3, 3, kAux3);
+            const Outs o = renderOuts(*inst, notes, frames, 256, {{int64_t(c1), 0}});
+            auto bRef = make(3, 3, kAux3);  // the unchanged render: B alone, aux 3 routed throughout
+            const Outs rb = renderOuts(*bRef, {on(0, 62)}, frames);
+            auto cRef = make(3, 0, 0);      // C set to main (what a fallback must equal)
+            const Outs rc = renderOuts(*cRef, {on(cOn, 64)}, frames);
+            note(fmt("aux 3 RMS after the change %.4f", rms(o.l[3], c1, size_t(frames))) +
+                 fmt(" (unchanged render %.4f)", rms(rb.l[3], c1, size_t(frames))));
+            check("unrouted under B: aux 3 is byte-identical to the unchanged render, throughout (cmp)", sameOut(o, 3, rb, 3));
+            check("...B never reaches main: main is silent until C, and exactly C set to main after (cmp)",
+                  silent(o, 0, 0, size_t(cOn)) && sameOut(o, 0, rc, 0));
+            check("...and B sounds on aux 3 after the change (RMS above 0.1)", rms(o.l[3], c1, size_t(frames)) > 0.1);
         }
-
-        // An output nothing sounds on switches at once: routed at 6000 with
-        // no note sounding, a note at 6000 is on aux 3 from its first frame.
         {
-            Rig rig(prog(3, 0.0), 0, 220.0, 0.3);
-            const Outs o = renderOuts(rig.inst, {on(6000, 62)}, 18000, 256, {{6000, kAux3}});
-            Rig refRig(prog(3, 0.0), kAux3, 220.0, 0.3);
-            const Outs ref = renderOuts(refRig.inst, {on(6000, 62)}, 18000);
-            check("routed while silent: the next note is on aux 3 from its first frame (cmp), main silent",
-                  sameOut(o, 3, ref, 3) && silent(o, 0));
+            // The reverse: unrouted, then routed at c1.
+            auto inst = make(3, 3, 0);
+            const Outs o = renderOuts(*inst, notes, frames, 256, {{int64_t(c1), kAux3}});
+            auto bRef = make(0, 0, 0);       // B set to main
+            const Outs rb = renderOuts(*bRef, {on(0, 62)}, frames);
+            auto cRef = make(3, 3, kAux3);   // C on aux 3, routed throughout
+            const Outs rc = renderOuts(*cRef, {on(cOn, 64)}, frames);
+            check("routed under B: main is byte-identical to B fallen back to main, throughout (cmp)", sameOut(o, 0, rb, 0));
+            check("...B never reaches aux 3: aux 3 is exactly C routed (cmp), silent before C",
+                  sameOut(o, 3, rc, 3) && silent(o, 3, 0, size_t(cOn)));
+            check("...and C did sound on aux 3 (RMS above 0.1)", rms(o.l[3], size_t(cOn), size_t(frames)) > 0.1);
+        }
+        {
+            // The host stops handing aux 3 a buffer under B ([c1, c2), the
+            // mask unchanged), then hands it back. The voice's samples of
+            // those calls are dropped, nothing reaches main, and B carries on
+            // where it would have been. Bus drives 0 here so the return can be
+            // compared byte for byte (a driven aux bus restarts from rest).
+            // The gap is not a whole number of the tone's periods (12100
+            // frames = 55.46 periods), so a voice that paused in it would come
+            // back out of phase.
+            const size_t c2 = 24155;
+            auto make0 = [&](uint32_t mask) {
+                auto r = std::make_unique<Instrument>();
+                r->prepare(kRate);
+                Program p = twoZones(3, 0.0);
+                installTwo(*r, p, 220.0, 0.3);
+                r->setRoutedOutputs(mask);
+                r->reset();
+                return r;
+            };
+            auto inst = make0(kAux3);
+            const Outs o = renderOuts(*inst, {on(0, 62)}, frames, 256,
+                                      {{int64_t(c1), kAux3, kAux3}, {int64_t(c2), kAux3, 0}});
+            auto ref = make0(kAux3);
+            const Outs r = renderOuts(*ref, {on(0, 62)}, frames);
+            check("aux 3's buffer withdrawn under B: no crash, main silent throughout (B is not moved to main)",
+                  silent(o, 0));
+            check("...nothing written to aux 3 while it had no buffer (the host's memory untouched)", silent(o, 3, c1, c2));
+            check("...and aux 3 is the unchanged render before and after (cmp): B ran on in the gap",
+                  sameOut(o, 3, r, 3, 0, c1) && sameOut(o, 3, r, 3, c2, size_t(frames)));
+            // The same while unrouted (a voice kept from before the change),
+            // with the bus drives on: still nothing anywhere else.
+            auto inst2 = make(3, 3, kAux3);
+            const Outs o2 = renderOuts(*inst2, {on(0, 62)}, frames, 256,
+                                       {{int64_t(c1), 0}, {int64_t(c1) + 3000, 0, kAux3}, {int64_t(c2), 0, 0}});
+            check("unrouted, then its buffer withdrawn, then back: main stays silent, aux 3 silent in the gap",
+                  silent(o2, 0) && silent(o2, 3, c1 + 3000, c2) && rms(o2.l[3], c2, size_t(frames)) > 0.1);
         }
     }
 
     // ------------------------------------------------------------------ R8 ---
-    group("R8 reset, the same notes, the same bytes, on every output, with routing changes");
+    group("R8 reset, the same notes, the same bytes, on every output, with routing changes and a withdrawn buffer");
     {
         Instrument inst;
         inst.prepare(kRate);
         Program prog;
         prog.busDrive = 0.4;
+        prog.auxBusDrive[0] = 0.3;     // busDrive1
+        prog.auxBusDrive[2] = 0.6;     // busDrive3
+        prog.auxBusDrive[7] = 0.2;     // busDrive8
+        prog.auxOutputLevel[2] = -6.0; // outputLevel3
         const int outs[] = {0, 1, 3, 8};
         for (int t = 0; t < 4; ++t) {
             Zone z = fullZone(PlayMode::Loop, 60);
@@ -438,7 +536,8 @@ int main(int argc, char** argv) {
                                          on(12345, 55), on(12400, 79), off(30000, 40), on(31000, 66), off(40000, 76)};
         // Changes at odd frames as well: the renderer ends a block at each, in
         // every block size, as a host calling setRoutedOutputs() there would.
-        const std::vector<Change> changes = {{0, 0x85u}, {9472, 0x01u}, {9600, 0xFFu}, {18944, 0x04u},
+        // From 18944 to 28416 aux 8's buffer is withdrawn under its voice.
+        const std::vector<Change> changes = {{0, 0x85u}, {9472, 0x01u}, {9600, 0xFFu}, {18944, 0x04u, 0x80u},
                                              {28416, 0x00u}, {28500, 0x80u}, {41111, 0xFFu}};
         auto run = [&](int block) {
             inst.setRoutedOutputs(0);
@@ -478,6 +577,10 @@ int main(int argc, char** argv) {
         const auto plain = std::make_shared<const Program>(prog);
         Program busOn = prog;
         busOn.busDrive = 0.5;
+        for (int k = 0; k < kNumAuxOutputs; ++k) {
+            busOn.auxBusDrive[k] = 0.1 * (k + 1);
+            busOn.auxOutputLevel[k] = -1.0 * k;
+        }
         const auto driven = std::make_shared<const Program>(busOn);
         inst.setProgram(driven);
         for (const Zone& z : prog.zones) inst.setSample(z.layers[0].id, Sample::mono(kRate, noise(4000, 9)));
@@ -543,6 +646,7 @@ int main(int argc, char** argv) {
                 inst.prepare(48000.0);
                 Program prog;
                 prog.busDrive = busDrive;
+                for (double& d : prog.auxBusDrive) d = busDrive;  // every output at the same amount, as before 2026-11-01
                 Zone z = fullZone(PlayMode::Loop, 60);
                 z.output = output;
                 addZone(prog, z);
@@ -573,6 +677,7 @@ int main(int argc, char** argv) {
             const double busIdle = caseNs(0, 0, 0.5, false) - idle;
             note(fmt("busDrive 0.5, nothing sounding, nothing routed (main's bus alone): %.1f ns", busIdle));
             note(fmt("busDrive 0.5, nothing sounding, every aux routed (nine buses): %.1f ns", caseNs(0, 0xFF, 0.5, false) - idle));
+            note(fmt("one voice on aux 3, aux 3 routed, every bus at 0.5: %.1f ns", caseNs(3, kAux3, 0.5, true) - idle));
         }
     }
 

@@ -239,6 +239,78 @@ int main() {
               toOff.ok && wasOff && toLp.ok && q.zones[0].filter == FilterType::Lp24);
     }
 
+    // ------------------------------------------------- per-output drive, level ---
+    group("busDrive1..8, outputLevel1..8 (DESIGN §13, settled 2026-11-01): appended program attributes");
+    {
+        // Append-only (R4): the six earlier program attributes keep their
+        // places; the sixteen new ones follow, aux 1..8 in order.
+        std::string names;
+        for (const auto& d : programParams()) names += std::string(names.empty() ? "" : " ") + d.name;
+        note("program attributes: " + names);
+        check("the table: version name polyphony busDrive outputLevel masterTune, then busDrive1..8, outputLevel1..8",
+              names == "version name polyphony busDrive outputLevel masterTune busDrive1 busDrive2 busDrive3 busDrive4 "
+                       "busDrive5 busDrive6 busDrive7 busDrive8 outputLevel1 outputLevel2 outputLevel3 outputLevel4 "
+                       "outputLevel5 outputLevel6 outputLevel7 outputLevel8");
+
+        // Missing = 0 (that bus off) and 0 dB; busDrive and outputLevel stay main's.
+        const auto old = parseProgram("<NassauDigitalProgram version=\"1\" busDrive=\"0.5\" outputLevel=\"-3\"/>");
+        bool zeros = old.ok;
+        for (int k = 0; k < kNumAuxOutputs && old.ok; ++k)
+            zeros = zeros && old.program.auxBusDrive[k] == 0.0 && old.program.auxOutputLevel[k] == 0.0;
+        check("a program without them reads every aux bus drive as 0 and every aux level as 0 dB, main's kept",
+              zeros && old.program.busDrive == 0.5 && old.program.outputLevel == -3.0);
+        const auto set = parseProgram(
+            "<NassauDigitalProgram version=\"1\" busDrive3=\"0.7\" outputLevel8=\"-6.5\" busDrive9=\"0.1\"/>");
+        check("busDrive3=\"0.7\" is aux 3's drive, outputLevel8=\"-6.5\" aux 8's level, nothing else moves",
+              set.ok && set.program.auxBusDrive[2] == 0.7 && set.program.auxOutputLevel[7] == -6.5 &&
+                  set.program.busDrive == 0.0 && set.program.outputLevel == 0.0 && set.program.auxBusDrive[1] == 0.0);
+        // Each attribute reaches its own aux output's slot and no other.
+        bool ownSlot = true;
+        for (int k = 1; k <= kNumAuxOutputs; ++k) {
+            const auto one = parseProgram("<NassauDigitalProgram version=\"1\" busDrive" + std::to_string(k) +
+                                          "=\"0.5\" outputLevel" + std::to_string(k) + "=\"-7\"/>");
+            for (int j = 0; j < kNumAuxOutputs; ++j)
+                ownSlot = ownSlot && one.ok && one.program.auxBusDrive[j] == (j == k - 1 ? 0.5 : 0.0) &&
+                          one.program.auxOutputLevel[j] == (j == k - 1 ? -7.0 : 0.0);
+        }
+        check("busDrive<k> and outputLevel<k> set aux k's drive and level, for k = 1..8, and nothing else", ownSlot);
+        check("busDrive9 (no ninth aux) is not an attribute: kept as an unknown one",
+              set.ok && set.program.extras.attributes.size() == 1 && set.program.extras.attributes[0].first == "busDrive9");
+        check("out of range refused: busDrive3=\"1.5\", outputLevel2=\"30\", busDrive1=\"-0.1\"",
+              !parseProgram("<NassauDigitalProgram version=\"1\" busDrive3=\"1.5\"/>").ok &&
+                  !parseProgram("<NassauDigitalProgram version=\"1\" outputLevel2=\"30\"/>").ok &&
+                  !parseProgram("<NassauDigitalProgram version=\"1\" busDrive1=\"-0.1\"/>").ok);
+
+        // The writer writes every attribute, defaults included (C1).
+        const std::string written = writeProgram(old.program);
+        bool allWritten = true;
+        for (int k = 1; k <= kNumAuxOutputs; ++k)
+            allWritten = allWritten && written.find(" busDrive" + std::to_string(k) + "=\"0\"") != std::string::npos &&
+                         written.find(" outputLevel" + std::to_string(k) + "=\"0\"") != std::string::npos;
+        check("written out at their defaults, all sixteen (busDrive<k>=\"0\", outputLevel<k>=\"0\")", allWritten);
+        const auto back = parseProgram(writeProgram(set.program));
+        check("...and a program with them set reads back equal", back.ok && back.program == set.program);
+
+        Program q = set.program;
+        q.auxOutputLevel[4] = -0.25;
+        Program r = set.program;
+        r.auxBusDrive[7] = 0.0000001;
+        check("program equality notices outputLevel5 and busDrive8", !(q == set.program) && !(r == set.program));
+
+        // Edits: absolute and relative (clamped), and the restore gives back
+        // the program exactly (C1.5).
+        Program e = set.program;
+        const auto ed = setProgramParams(e, {ParamEdit::absolute("busDrive5", "0.4"), ParamEdit::by("busDrive3", 5.0),
+                                             ParamEdit::by("outputLevel8", -1.5)});
+        check("an edit sets busDrive5 0.4, moves busDrive3 +5 (clamped to 1) and outputLevel8 -1.5",
+              ed.ok && e.auxBusDrive[4] == 0.4 && e.auxBusDrive[2] == 1.0 && e.auxOutputLevel[7] == -8.0);
+        check("...returning the absolute values it replaced (busDrive5 \"0\", busDrive3 \"0.7\", outputLevel8 \"-6.5\")",
+              ed.prior.size() == 3 && ed.prior[0] == PriorValue{0, "busDrive5", "0"} &&
+                  ed.prior[1] == PriorValue{0, "busDrive3", "0.7"} && ed.prior[2] == PriorValue{0, "outputLevel8", "-6.5"});
+        const auto un = restoreProgramParams(e, ed.prior);
+        check("...and restoring them gives the program back exactly", un.ok && e == set.program);
+    }
+
     // ---------------------------------------------------------------- C1.2 ---
     group("C1.2 unknown attributes and elements survive the round trip");
     {

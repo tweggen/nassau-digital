@@ -3,7 +3,10 @@
      format, each at a value other than its default, plus unknown attributes
      and elements at every level. program_tests.cpp checks the coverage. -->
 <NassauDigitalProgram version="1" name="Kit &amp; &quot;Friends&quot; &#x2013; 1" polyphony="64"
-    busDrive="0.2" outputLevel="-3.5" masterTune="0.1234567890123456" nextId="13"
+    busDrive="0.2" outputLevel="-3.5" masterTune="0.1234567890123456"
+    busDrive1="0.1" busDrive2="0.25" busDrive3="0.3" busDrive4="0.45" busDrive5="0.5" busDrive6="0.65"
+    busDrive7="0.7" busDrive8="1" outputLevel1="-1" outputLevel2="-2.5" outputLevel3="-6" outputLevel4="3"
+    outputLevel5="-12" outputLevel6="-0.5" outputLevel7="6" outputLevel8="-144" nextId="13"
     futureProgramAttr="kept &lt;verbatim&gt;">
   <zone id="1" keyLo="36" keyHi="36" velLo="1" velHi="126" rootKey="36" keyTrack="0"
         mode="oneshot" tempoMethod="resample" drive="0.4" driveCurve="tube" driveMix="0.75"

@@ -147,9 +147,15 @@ struct Program {
     int version = 1;
     std::string name;
     int polyphony = kDefaultPolyphony;
-    double busDrive = 0.0;
-    double outputLevel = 0.0;
+    double busDrive = 0.0;     ///< main's kit-bus drive
+    double outputLevel = 0.0;  ///< main's level, dB
     double masterTune = 0.0;
+    // Each aux output's own kit-bus drive and level (DESIGN §13, settled
+    // 2026-11-01): attributes busDrive1..busDrive8 and outputLevel1..
+    // outputLevel8, [k - 1] for aux k. A missing one is 0 (that bus off) and
+    // 0 dB.
+    double auxBusDrive[kNumAuxOutputs] = {};
+    double auxOutputLevel[kNumAuxOutputs] = {};
     uint32_t nextId = 1;   ///< the next id to hand out; ids are never reused (DESIGN §2)
     std::vector<Zone> zones;
     Extras extras;

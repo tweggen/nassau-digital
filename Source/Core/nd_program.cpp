@@ -144,6 +144,14 @@ constexpr double kMaxTime = 60.0;      // seconds, any envelope segment
             [](T& o, double v) { o.field = static_cast<decltype(o.field)>(v); },                  \
             [](const T& o) -> const std::string& { return noText(&o); }, [](T&, const std::string&) {} \
     }
+// The same, under an XML name of its own (an element of an array field).
+#define ND_NUM_AS(T, name, field, kind, lo, hi)                                                   \
+    ParamDesc<T> {                                                                                \
+        name, ParamKind::kind, lo, hi, nullptr, 0,                                                \
+            [](const T& o) { return static_cast<double>(o.field); },                              \
+            [](T& o, double v) { o.field = static_cast<double>(v); },                             \
+            [](const T& o) -> const std::string& { return noText(&o); }, [](T&, const std::string&) {} \
+    }
 #define ND_BOOL(T, field)                                                                         \
     ParamDesc<T> {                                                                                \
         #field, ParamKind::Bool, 0, 1, nullptr, 0, [](const T& o) { return o.field ? 1.0 : 0.0; },  \
@@ -240,11 +248,30 @@ const std::vector<ProgramParam>& programParams() {
         ND_NUM(Program, busDrive, Real, 0, 1),
         ND_NUM(Program, outputLevel, Real, -144, 24),
         ND_NUM(Program, masterTune, Real, -96, 96),
+        // Each aux output's own kit-bus drive and level (DESIGN §13, settled
+        // 2026-11-01); busDrive and outputLevel above are main's.
+        ND_NUM_AS(Program, "busDrive1", auxBusDrive[0], Real, 0, 1),
+        ND_NUM_AS(Program, "busDrive2", auxBusDrive[1], Real, 0, 1),
+        ND_NUM_AS(Program, "busDrive3", auxBusDrive[2], Real, 0, 1),
+        ND_NUM_AS(Program, "busDrive4", auxBusDrive[3], Real, 0, 1),
+        ND_NUM_AS(Program, "busDrive5", auxBusDrive[4], Real, 0, 1),
+        ND_NUM_AS(Program, "busDrive6", auxBusDrive[5], Real, 0, 1),
+        ND_NUM_AS(Program, "busDrive7", auxBusDrive[6], Real, 0, 1),
+        ND_NUM_AS(Program, "busDrive8", auxBusDrive[7], Real, 0, 1),
+        ND_NUM_AS(Program, "outputLevel1", auxOutputLevel[0], Real, -144, 24),
+        ND_NUM_AS(Program, "outputLevel2", auxOutputLevel[1], Real, -144, 24),
+        ND_NUM_AS(Program, "outputLevel3", auxOutputLevel[2], Real, -144, 24),
+        ND_NUM_AS(Program, "outputLevel4", auxOutputLevel[3], Real, -144, 24),
+        ND_NUM_AS(Program, "outputLevel5", auxOutputLevel[4], Real, -144, 24),
+        ND_NUM_AS(Program, "outputLevel6", auxOutputLevel[5], Real, -144, 24),
+        ND_NUM_AS(Program, "outputLevel7", auxOutputLevel[6], Real, -144, 24),
+        ND_NUM_AS(Program, "outputLevel8", auxOutputLevel[7], Real, -144, 24),
     };
     return t;
 }
 
 #undef ND_NUM
+#undef ND_NUM_AS
 #undef ND_BOOL
 #undef ND_ENUM
 #undef ND_TEXT

@@ -355,42 +355,73 @@ for the author.
 
 DESIGN §3.1.
 
-**DONE 2026-10-27, except C6.3's per-output amount, which waits on the
-author** (the program has one `busDrive` and no attribute for an aux output's
-own; see the C6 PR). `Tests/outputs_tests` 31/31; API (appends):
-`Instrument::process(…, outBuses, numBuses, n)` (qbx's `outBuses[bus][channel]`,
-bus 0 main, bus k aux k), `setRoutedOutputs(mask)` / `routedOutputs()` (bit k =
-aux k+1, as `twSamplerHost`; qbx's `setRoutedOutBuses` mask >> 1),
-`kitBusOversampling(output)`, `kNumOutputs` = 9, `kRouteFadeFrames` = 256.
+**DONE 2026-10-27; C6.3 finished and the routing rule replaced 2026-11-01**
+(DESIGN §13, settled 2026-11-01). `Tests/outputs_tests` 41/41, `program_tests`
+88/88; API (appends): `Instrument::process(…, outBuses, numBuses, n)` (qbx's
+`outBuses[bus][channel]`, bus 0 main, bus k aux k), `setRoutedOutputs(mask)` /
+`routedOutputs()` (bit k = aux k+1, as `twSamplerHost`; qbx's
+`setRoutedOutBuses` mask >> 1), `kitBusOversampling(output)`, `kNumOutputs` =
+9; program attributes `busDrive1`…`busDrive8` and `outputLevel1`…`outputLevel8`
+(aux k's; missing = 0 and 0 dB; `busDrive` / `outputLevel` stay main's),
+appended to the program table, so the reader, the writer (which writes all
+sixteen, defaults included, as it writes every attribute), equality and the
+edits take them; `Program::auxBusDrive[8]` / `auxOutputLevel[8]`.
+`kRouteFadeFrames` is deprecated and unused (kept so code naming it compiles).
 C6.1: a zone on aux 3, routed: aux 3 equals the zone's render on main (cmp,
-RMS 0.199654), main's peak exactly 0, the other aux outputs silent; with a main
-zone sounding too, main is exactly that zone alone (cmp) and the aux 3 tone on
-main −299.5 dB. C6.2: aux 3 unrouted, main is cmp-equal to the zone set to
-main in five ways (mask 0; every aux but 3; aux 3 masked but a null buffer;
-numBuses 1; the two-pointer process()), with main's bus drive 0.5, output
-level −3 dB, the zone oversampled and notes interleaved A B A B; the zone
-moves main by up to 0.225. C6.3, at the one `busDrive` 0.5 every output takes:
-main is exactly zone A driven alone and aux 3 exactly zone B driven alone
-(cmp); aux 3 equals B driven on main (cmp); intermodulation across outputs
-−280.9 / −286.3 dB against −18.0 dB on one shared bus; buses of unfed aux
-outputs at rest; an aux output's own amount is not settable. Routing changes
-on a sounding 220 Hz tone, on its crest: largest step 1.00× the tone's own on
-main and aux 3, at bus drive 0 and 0.5 (a hard switch: 34.7×); main + aux 3 =
-the signal within 7.5e-9; a change during a crossfade waits for its end; an
-output nothing sounds on switches at once; `reset()` snaps. R8:
-byte-identical across reset and blocks 256 / 37 / 1000, all nine outputs, seven
-routing changes. R3: 0 allocations over 3000 blocks, 429 routing changes, five
-buffer layouts. Main-only renders byte-identical to before C6 (sha256
-735f6c05…, blocks 256 and 37). Per-voice cost unchanged against C5 (Release,
-Xeon E5-1650 v3, load 16.8 → 9.5 from a qbx build, three runs, base / C6 in
-the same session): one layer drive 0 67.1–68.1 / 66.8–67.6 ns, 4× 317.5–324.3
-/ 319.4–321.3, four layers 167.7–171.3 / 167.9–168.0, four layers 4×
-419.3–431.3 / 420.7–422.9. A bus at `busDrive` 0.5 costs 162.5 ns per frame;
-all nine running 1462.6. Each watched failing: routing ignored (14 checks), no
-fallback (10), the fallback after main's bus (12), one shared bus (9), aux
-buses never run (3), a hard switch (4), a change retargeting a crossfade (2),
-the crossfade restarted per call (7, R8 among them), a heap buffer in the
-routing (3600 allocations), a silent output crossfading (1).
+RMS 0.199933 since filter `off` became the default; 0.199654 before), main's
+peak exactly 0, the other aux outputs silent; with a main zone sounding too,
+main is exactly that zone alone (cmp) and the aux 3 tone on main −298.1 dB.
+C6.2: aux 3 unrouted, main is cmp-equal to the zone set to main in five ways
+(mask 0; every aux but 3; aux 3 masked but a null buffer; numBuses 1; the
+two-pointer process()), with main's bus drive 0.5, output level −3 dB, the
+zone oversampled and notes interleaved A B A B; the zone moves main by up to
+0.225. C6.3, at `busDrive` 0.2, `busDrive3` 0.7, `busDrive5` 0.9 (nothing on
+aux 5): main is exactly zone A driven alone at 0.2 and aux 3 exactly zone B
+driven at 0.7 (B alone on main at `busDrive` 0.7, cmp), 0.0499 away from B at
+main's amount; `busDrive` 0.2 → 0.45 moves main by 0.0186 and leaves aux 3
+byte-identical, `busDrive3` 0.7 → 0.35 moves aux 3 by 0.0412 and leaves main
+byte-identical; intermodulation across outputs −281.3 / −286.2 dB against
+−25.3 dB on one shared bus; B unrouted takes main's amount (cmp); `busDrive3`
+0 leaves aux 3 undriven while main's bus drives (cmp); buses of unfed aux
+outputs at rest (aux 5 at 0.9 included). Levels: `outputLevel` −3,
+`outputLevel3` −9: main is A at −3 dB and aux 3 B at −9 dB (cmp, −9.00 dB
+RMS); moving `outputLevel3` leaves main byte-identical; a fallback takes main's
+level (cmp). Program format: the table order is pinned, each `busDrive<k>` /
+`outputLevel<k>` reaches aux k's slot and no other (k = 1…8), out-of-range
+values are refused, `busDrive9` is kept as an unknown attribute, absolute and
+relative (clamped) edits return the absolute values they replaced and restore
+exactly. **Routing changes under a sounding voice**: the voice keeps the output
+it started on, and later notes follow (replaces the 256-frame crossfade):
+unrouted at frame 12055 under B (bus drives on: main 0.3, aux 3 0.5), aux 3 is
+byte-identical to the unchanged render throughout (B keeps its bus too) and
+main is silent until C starts at 13055, then exactly C set to main (cmp); the
+reverse (routed under B): main is byte-identical to B fallen back to main
+throughout, aux 3 exactly C routed (cmp). A voice whose output the host hands
+no buffer for (frames 12055–24155, mask unchanged): nothing reaches main,
+nothing is written to aux 3, and aux 3 is byte-identical to the unchanged
+render before and after the gap (the voice ran on: the gap is 55.46 periods,
+so a paused voice would come back out of phase); likewise for a voice kept on
+an unrouted aux. R8: byte-identical across reset and blocks 256 / 37 / 1000,
+all nine outputs, seven routing changes and aux 8's buffer withdrawn under
+its voice, four different bus drives and an aux level. R3: 0 allocations over
+3000 blocks, 429 routing changes, five buffer layouts, every bus at its own
+amount. Main-only renders, and steady-routing renders at bus drive 0 and
+0 dB on all nine outputs, are byte-identical to before this change (a hash
+over 200 blocks × nine outputs, main and origin/main 9983f1a builds).
+Per-output cost unchanged (Release, Xeon E5-1650 v3, load 4.5 → 2.2, three
+runs, base / this): one voice on main 38.5–58.0 / 38.0–39.7 ns, on aux 3
+routed 40.0–41.8 / 41.1–41.4, aux 3 falling back 38.4–40.1 / 39.1–61.6 (one
+outlier each), main's bus at 0.5 alone 158.0–164.1 / 157.3–164.4, nine buses
+1441.1–1480.2 / 1432.2–1489.7; one voice on aux 3 with every bus at 0.5:
+371.7–386.4 ns; per voice (fx_tests, lp24) 65.4–68.0 / 65.4–67.9. Each
+watched failing: aux buses taking `busDrive` (5 checks), aux outputs taking
+`outputLevel` (4), a sounding voice following the routing (7), a voice without
+a buffer moved to main (2), ended (2) or paused (1), an aux bus stopping with
+its routing under a voice it still carries (1), a voice's output ignoring a
+null buffer (3), `busDrive3` misnamed in the table (8), `outputLevel5` written
+into aux 4's slot (2). Before 2026-11-01 (the C6 PR): one `busDrive` drove
+every output's bus and the routing crossfaded sounding voices over 256 frames
+(a step 1.00× the tone's own against 34.7× for a hard switch); both are gone.
 
 * **C6.1** A zone on aux 3 with aux 3 routed: its signal is on aux 3 and
   absent from main (below −120 dB).
