@@ -97,7 +97,13 @@ and QBX-251). `return_track_split_cmp.qxa`: `tw.test.clap.split`'s bus 1
 routed to a return track renders byte-identical to a plain track playing the
 same clip (576044 B, on `test_stereo.wav`, whose channels differ). M3, the
 engine half of sidechain inputs (qbx#318, QBX-252), is merged too.
-**X2.2 open**: proposal 55 M4 (QBX-262), the sidechain model and verbs.
+**X2.2 DONE 2026-11-01** (qbx#332, QBX-262, proposal 55 M4).
+`sidechain_duck_from_return.qxa`: B through `tw.test.clap.duck`, keyed from a
+return track fed by A's split aux, measures 0.124997 / 0.062499 against dry
+0.499987 / 0.24999 inside the key, 0.25000 × dry on both channels (band ±1 %),
+and dry before and after it, with the sidechain cleared, and with the key clip
+removed. Soloing B keeps the duck; `post` with the return's fader at −inf stops
+it, `pre` does not; moving the key clip moves the duck. **X2 is complete.**
 
 ---
 
@@ -684,6 +690,19 @@ DESIGN §6.1.
 * **Q2.3** An offline render started while a layer's render is outstanding
   waits at the run barrier (its log line is asserted), and its bytes equal a
   render started after the layer was ready (`cmp`).
+
+**DONE 2026-11-01** (qbx#330, QBX-263). Q2.1 (`sampler_q2_generations.qxa`):
+with the job held across the `set-layer` edit, installing the generation
+advances the track's content epoch (11 → 12), and the next render equals the
+new sample's single-generation golden byte for byte, silent before frame 1000.
+Q2.2: two renders with a swap between them each equal their own sample's
+golden (17 pages each), also after undo, redo and a 2 → 1 → 2 channel rebuild.
+Q2.3 (`sampler_q2_barrier.qxa`): a job held 1500 ms makes the render log
+`run barrier: waited 1504 ms for 1 sampler generation(s) on track 0` exactly
+once, and its bytes equal a render started after the layer was ready; past the
+bound (`SMARAGD_SAMPLER_SETTLE_MS`, default 30 s) the render is refused with
+the reason. Not gated: "no install during a render" (no script can make a job
+finish mid-render) and live playback. Corrections: qbx proposal 56 §11 "Q2".
 
 ### Q3 — Live asset links (decided: from the start)
 
