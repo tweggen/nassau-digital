@@ -9,6 +9,10 @@
 // Also: tempo-oneshot lasts its length scaled by the tempo and ignores
 //      note-off; the stretch method and beats = 0 leave the rate alone; the
 //      bytes are deterministic with tempo changes; no allocation in process().
+// And the author's decisions of 2026-11-01 (DESIGN §13): `beats` spans the
+//      loop [loopStart, loopEnd), not the played length, and a lead-in plays
+//      at the same rate; tempo modes ignore the key (every key plays at the
+//      tempo's rate).
 //
 // The test loop: 1 s at 48 kHz (2 beats at 120 BPM), a 1 kHz sine (exactly
 // 1000 cycles, so the loop's seam is continuous) under a raised-cosine swell
@@ -46,13 +50,17 @@ std::vector<float> swellLoop(double rate, double seconds) {
     return v;
 }
 
-// One zone, one layer of `beats` beats, the given sample.
-void tempoLayer(Instrument& inst, PlayMode mode, TempoMethod method, double beats, std::shared_ptr<const Sample> s) {
+// One zone, one layer of `beats` beats, the given sample; loop points
+// [loopStart, loopEnd) (-1: none, the played length).
+void tempoLayer(Instrument& inst, PlayMode mode, TempoMethod method, double beats, std::shared_ptr<const Sample> s,
+                int64_t loopStart = -1, int64_t loopEnd = -1) {
     Program prog;
     Zone z = fullZone(mode, 60);
     z.tempoMethod = method;
     z.release = 0.05;
     z.layers[0].beats = beats;
+    z.layers[0].loopStart = loopStart;
+    z.layers[0].loopEnd = loopEnd;
     addZone(prog, z);
     install(inst, prog);
     inst.setSample(prog.zones[0].layers[0].id, std::move(s));
@@ -182,6 +190,118 @@ int main() {
                   std::fabs(endMs - 1200.0) <= 1.0 && inst.activeVoices() == 0);
             check("tempo-oneshot: its pitch falls by 12*log2(1.2) semitones +- 1 cent", std::fabs(cents) <= 1.0);
         }
+    }
+
+    // ------------------------------------------------- beats span the loop ---
+    group("beats spans the loop [loopStart, loopEnd), and a lead-in plays at the same rate (DESIGN §13, 2026-11-01)");
+    {
+        // A 0.25 s lead-in (a 2 kHz sine, 500 whole cycles), the 2-beat 1 s
+        // loop above, and a 0.5 s tail (a 3 kHz sine) after loopEnd: start 0,
+        // end 1.75 s, loop [0.25 s, 1.25 s), beats 2. The loop is at 120 BPM
+        // only if the beats span the loop; spread over [start, end) they would
+        // put it at 68.6 BPM (period 2.1 s at 100 BPM).
+        const size_t lead = at(0.25), loopLen = at(1.0), tail = at(0.5);
+        std::vector<float> v;
+        for (size_t i = 0; i < lead; ++i) v.push_back(static_cast<float>(0.5 * std::sin(2.0 * kPi * 2000.0 * i / kRate)));
+        const std::vector<float> loop = swellLoop(kRate, 1.0);
+        v.insert(v.end(), loop.begin(), loop.end());
+        for (size_t i = 0; i < tail; ++i) v.push_back(static_cast<float>(0.5 * std::sin(2.0 * kPi * 3000.0 * i / kRate)));
+        const auto smp = Sample::mono(kRate, v);
+        const int64_t ls = static_cast<int64_t>(lead), le = static_cast<int64_t>(lead + loopLen);
+        const double expectSemis = -12.0 * std::log2(120.0 / 100.0);
+
+        Instrument inst;
+        inst.prepare(kRate);
+        tempoLayer(inst, PlayMode::TempoLoop, TempoMethod::Resample, 2.0, smp, ls, le);
+        inst.setTempo(100.0);
+        const Stereo a = render(inst, {on(0, 60)}, at(8.0));
+        // At 100 BPM the lead-in lasts 0.3 s; the loop runs from there.
+        const double period = autocorrPeriod(a.l, at(1.0), at(7.9), static_cast<int>(at(1.15)), static_cast<int>(at(1.25)));
+        const double periodMs = period / kRate * 1000.0;
+        const double fLoop = zeroCrossingF0(a.l, at(1.0), at(7.9), kRate);
+        const double centsLoop = (12.0 * std::log2(fLoop / 1000.0) - expectSemis) * 100.0;
+        const double fLead = zeroCrossingF0(a.l, at(0.02), at(0.28), kRate);
+        const double centsLead = (12.0 * std::log2(fLead / 2000.0) - expectSemis) * 100.0;
+        char buf[320];
+        std::snprintf(buf, sizeof buf,
+                      "tempo-loop, loop [0.25 s, 1.25 s) of a 1.75 s layer, beats 2, 100 BPM: period %.3f ms (expected "
+                      "1200), loop carrier %.4f Hz (%+.5f cent), lead-in %.4f Hz (%+.5f cent; 2 kHz x 100/120)",
+                      periodMs, fLoop, centsLoop, fLead, centsLead);
+        note(buf);
+        check("the loop's period is 2 beats at 100 BPM: 1200 ms +- 1 ms", std::fabs(periodMs - 1200.0) <= 1.0);
+        check("the loop's pitch falls by 12*log2(1.2) semitones +- 1 cent", std::fabs(centsLoop) <= 1.0);
+        check("the lead-in plays at the same rate (2 kHz falls by 12*log2(1.2) semitones +- 1 cent)",
+              std::fabs(centsLead) <= 1.0);
+        // The lead-in ends after 0.25 s x 120/100 = 0.3 s: the 2 kHz line is
+        // there before and gone after.
+        const double fBefore = zeroCrossingF0(a.l, at(0.20), at(0.29), kRate);
+        const double fAfter = zeroCrossingF0(a.l, at(0.31), at(0.45), kRate);
+        std::snprintf(buf, sizeof buf, "carrier 0.20-0.29 s %.2f Hz, 0.31-0.45 s %.2f Hz", fBefore, fAfter);
+        note(buf);
+        check("...and lasts 0.25 s x 120/100 = 0.3 s (2 kHz-scaled before 0.29 s, the loop's 1 kHz-scaled after 0.31 s, +- 1 %)",
+              std::fabs(fBefore / (2000.0 * 100.0 / 120.0) - 1.0) < 0.01 &&
+                  std::fabs(fAfter / (1000.0 * 100.0 / 120.0) - 1.0) < 0.01);
+
+        // tempo-oneshot over the same layer: the loop points set its rate,
+        // and it plays [start, end) once: 1.75 s x 120/100 = 2.1 s.
+        Instrument one;
+        one.prepare(kRate);
+        tempoLayer(one, PlayMode::TempoOneShot, TempoMethod::Resample, 2.0, smp, ls, le);
+        one.setTempo(100.0);
+        const Stereo o = render(one, {on(0, 60)}, at(3.0));
+        const double endMs = static_cast<double>(lastAbove(o.l, 1e-4)) / kRate * 1000.0;
+        const double fTail = zeroCrossingF0(o.l, at(1.55), at(2.05), kRate);
+        std::snprintf(buf, sizeof buf, "tempo-oneshot over the same layer: last sound at %.3f ms (expected 2100), tail %.3f Hz (expected 2500)",
+                      endMs, fTail);
+        note(buf);
+        check("tempo-oneshot with loop points: the loop sets the rate, the whole layer plays once: 2100 ms +- 1 ms",
+              std::fabs(endMs - 2100.0) <= 1.0 && std::fabs(1200.0 * std::log2(fTail / 2500.0)) <= 1.0);
+    }
+
+    // ------------------------------------------------- tempo modes and keys ---
+    group("tempo modes ignore the key: every key plays at the tempo's rate (DESIGN §13, 2026-11-01)");
+    {
+        // A zone over every key, root 60, key tracking on (the default): in a
+        // tempo mode keys 60 and 67 (and 48) render the same bytes; in loop
+        // mode, key tracking still transposes.
+        const auto loop = Sample::mono(kRate, swellLoop(kRate, 1.0));
+        auto renderKey = [&](PlayMode mode, TempoMethod method, int key) {
+            Instrument inst;
+            inst.prepare(kRate);
+            tempoLayer(inst, mode, method, 2.0, loop);
+            inst.setTempo(100.0);
+            return render(inst, {on(0, key), off(at(1.5), key)}, at(2.0));
+        };
+        auto same = [](const Stereo& x, const Stereo& y) {
+            return x.l.size() == y.l.size() &&
+                   std::memcmp(x.l.data(), y.l.data(), x.l.size() * sizeof(float)) == 0 &&
+                   std::memcmp(x.r.data(), y.r.data(), x.r.size() * sizeof(float)) == 0;
+        };
+        struct Case {
+            const char* name;
+            PlayMode mode;
+            TempoMethod method;
+        } cases[] = {{"tempo-loop resample", PlayMode::TempoLoop, TempoMethod::Resample},
+                     {"tempo-oneshot resample", PlayMode::TempoOneShot, TempoMethod::Resample},
+                     {"tempo-loop stretch", PlayMode::TempoLoop, TempoMethod::Stretch}};
+        for (const Case& c : cases) {
+            const Stereo k60 = renderKey(c.mode, c.method, 60), k67 = renderKey(c.mode, c.method, 67),
+                         k48 = renderKey(c.mode, c.method, 48);
+            const double f67 = zeroCrossingF0(k67.l, at(0.2), at(1.1), kRate);
+            char buf[200];
+            std::snprintf(buf, sizeof buf, "%s, key 67 at 100 BPM: carrier %.4f Hz", c.name, f67);
+            note(buf);
+            check(std::string(c.name) + ": keys 60, 67 and 48 render the same bytes (cmp)",
+                  same(k60, k67) && same(k60, k48) && rms(k60.l, 0, at(1.0)) > 0.1);
+        }
+        const Stereo l60 = renderKey(PlayMode::Loop, TempoMethod::Resample, 60),
+                     l67 = renderKey(PlayMode::Loop, TempoMethod::Resample, 67);
+        const double f67 = zeroCrossingF0(l67.l, at(0.2), at(0.9), kRate);
+        char buf[200];
+        std::snprintf(buf, sizeof buf, "loop mode, key 67: carrier %.4f Hz (+7 st: %.4f)", f67, 1000.0 * std::exp2(7.0 / 12.0));
+        note(buf);
+        check("loop mode still tracks the key: key 67 plays 7 semitones up (+- 1 cent), not the bytes of key 60",
+              !same(l60, l67) && std::fabs(1200.0 * std::log2(f67 / 1000.0) - 700.0) <= 1.0);
     }
 
     // ---------------------------------------------------------------- C7.2 ---

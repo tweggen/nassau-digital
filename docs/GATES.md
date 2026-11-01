@@ -415,6 +415,25 @@ Byte-identical across reset and block sizes 256/37 with tempo changes; 0
 allocations in 248 000 frames with 100 tempo changes. Watched failing: the
 ratio inverted (period 1150 ms at the lag search's edge, +631 cent), and a
 read position rescaled at the change (steps 0.163 / 0.163 / 0.192).
+**Revised 2026-11-01** (DESIGN §13, settled 2026-11-01): `beats` spans the
+loop `[loopStart, loopEnd)`, not the played length, and tempo modes ignore the
+key. `tempo_tests` 31/31. A layer with a 0.25 s lead-in (2 kHz), the 2-beat
+1 s loop and a 0.5 s tail (3 kHz) after `loopEnd`, beats 2, at 100 BPM: loop
+period 1200.000 ms, pitch −0.00001 cent off −3.156413 st; the lead-in at
+1666.6667 Hz (+0.00006 cent: the same rate) and over by 0.3 s;
+`tempo-oneshot` over the same layer sounds for 2100.021 ms (1.75 s × 1.2), tail
+at 2500.000 Hz. Keys 60, 67 and 48 render the same bytes (cmp) in
+`tempo-loop` and `tempo-oneshot` by resampling and in `tempo-loop` by
+stretch (key tracking on); a plain `loop` zone still plays key 67 at
+1498.3071 Hz (+7 st). The C7.1 / C7.2 numbers above are unchanged (their
+layers have no loop points and are played at the root key); the R8 and R3
+cases now play their tempo voices untransposed (same checks, same results:
+byte-identical, 0 allocations). Filter key tracking still follows the key in
+tempo modes (it is not a transposition). Accepted as built: a sounding
+`tempo-oneshot` follows a tempo change; the host passes the tempo with
+`setTempo()` per block. Watched failing: beats over `[start, end)` (5
+checks), tempo modes tracking the key (3), the lead-in at the sample's own
+rate (2).
 
 * **C7.1** A 2-beat loop at 120 BPM played at 100 BPM measures a period of
   2·60/100 s ± 1 ms, and its pitch falls by 12·log2(120/100) semitones
