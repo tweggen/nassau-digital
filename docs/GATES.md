@@ -600,6 +600,49 @@ an orphan stopping the overlay (3), flatten dropping the overlay (2), `.was`
 ignored (2), a drifted edit held back (2), one shared `.was` for ALL (3), undo
 not writing `.was` back (2), undo leaving the verbs (4).
 
+**The author's decisions of 2026-11-01 built, 2026-11-01** (DESIGN §8, §12, §13).
+`Tests/overlay_tests` 100/100 (54 new), `Tests/program_tests` 118/118 (15
+new). *libraryVersion*: an appended text program attribute, written only when
+set (a program without one keeps its bytes); the overlay's existing
+`baseVersion` (name kept: it is in written overlays and §12) now means the
+base's `libraryVersion`, recorded with the overlay's first edit and cleared by
+its undo. On base "3.1" an overlay made on "3" reports `baseDrift`
+{libraryVersion, 3, 3.1}, applies every edit and renders byte-identical to
+"3" (cmp); flatten clears `libraryVersion`. *Zone lists*: `parseZoneScope`
+reads "all", "17", "3 5 7"; `zone="5 9 17"` `tune +2` is recorded as three
+set-zones with `.was` 1 / −3 / 0; on v4 exactly #2 is orphaned (id 17) and the
+result equals v4 with zones 5 and 9 edited (cmp); a stored list is refused.
+*set-program*: `outputLevel -6`, `masterTune +0.5`, `busDrive2 0.3` recorded as
+one `set-program` with `.was`; equal to the direct edit (cmp; RMS 0.3191 →
+0.1597); on a base with outputLevel −3 reported drifted {outputLevel, 0, −3}
+and −6 plays (cmp); `version`/`libraryVersion` refused (recorded and stored);
+undo gives the same overlay bytes and render (cmp). *Structural*: `add-zone`
+/ `add-layer` take ids from **1,000,000** (zone 1000000, layer 1000001, a
+layer 1000002 in base zone 9) and equal the same added by hand (cmp; RMS from
+key 42's note-on 0.4343 → 0.5519); a base adding zones after the overlay takes
+19, 21 and every overlay edit still applies, all ids distinct; `addZone`
+stops at 999999 and the reader refuses `nextId` > 1000000; on its own
+flattened program (which keeps ids 1000000+) the adds are refused "already in
+the base" and a new overlay hands out 1000003. `hide-zone 9`: what plays lacks
+zone 9 and layer 10, the base keeps them, cmp with the zone removed by hand
+(RMS key 38 → 40: 0.3636 → 0.2493), flatten drops it, undo puts it back
+second. Every verb kind round-trips byte-stable; on v4 the edits naming zone
+17 / layer 18 (#0, #1, the add-layer into 17) are orphaned, flatten proceeds
+and drops them. Watched failing (21 sabotages, each bit 1–13 checks): version
+mismatch not reported (3), baseVersion not recorded (6), stored list not
+named for expansion (1), `parseZoneScope` keeping one id (6), set-program
+drift ignored (1), set-program of `libraryVersion` allowed (1), overlay ids
+from the program's counter (13), `addZone` ignoring the range (3), collision
+not refused (1), hide not applied (6), undo of add-zone / add-layer /
+hide / set-program / the baseVersion stamp not undone (1 each), equality
+ignoring `libraryVersion` (1), empty `libraryVersion` written (2), flatten
+keeping it (1), reader letting `nextId` into the range (1) or raising it past
+overlay ids (3), overlay `nextId` not written (1), add-layer to a missing
+zone refused instead of orphaned (2), an add-zone below the range accepted
+(1).
+Not built: hiding a LAYER (only zones, as decided), and re-basing an overlay
+onto a newer version (re-stamping `baseVersion`); see the PR.
+
 * **C8.1** Base v3 + an overlay that edits zone 17: what plays equals a
   program with the edit made directly (`cmp`).
 * **C8.2** Base v4 drops zone 17: the edit is kept, reported as orphaned, and

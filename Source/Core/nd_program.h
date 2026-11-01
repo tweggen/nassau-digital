@@ -2,7 +2,8 @@
 
 // nd_program.h - the program model (DESIGN §2, §4, §12).
 //
-//   Program   name, polyphony, kit-bus drive, output level, master tune, nextId
+//   Program   name, polyphony, kit-bus drive, output level, master tune, nextId,
+//             libraryVersion
 //    └─ Zone × n      key × velocity rectangle, root key, play mode, drive,
 //        │            filter, envelopes, modulation routes, pan, level, tune,
 //        │            choke group, output, pad, oversampling
@@ -63,6 +64,14 @@ inline int oversamplingFactor(Oversampling o) { return o == Oversampling::X2 ? 2
 constexpr int kNumAuxOutputs = 8;
 /// Up to four layers per zone (DESIGN §1, decided).
 constexpr int kMaxLayers = 4;
+/// The first id of the range reserved for zones and layers a library OVERLAY
+/// adds (DESIGN §8, decided 2026-11-01). A program never hands out an id from
+/// here on: addZone()/addLayer() refuse to, and the reader never lets nextId
+/// reach it. So a newer base that adds zones of its own cannot take an id an
+/// overlay already gave out. A program may still CARRY ids in the range: a
+/// flattened program keeps its overlay's ids (the round-robin hash reads the
+/// zone id, so renumbering would change what a flattened program plays).
+constexpr uint32_t kOverlayIdFirst = 1000000;
 
 struct Layer {
     uint32_t id = 0;
@@ -164,7 +173,13 @@ struct Program {
     // 0 dB.
     double auxBusDrive[kNumAuxOutputs] = {};
     double auxOutputLevel[kNumAuxOutputs] = {};
-    uint32_t nextId = 1;   ///< the next id to hand out; ids are never reused (DESIGN §2)
+    uint32_t nextId = 1;   ///< the next id to hand out; ids are never reused (DESIGN §2); below kOverlayIdFirst
+    /// The library's version (DESIGN §8, decided 2026-11-01): set by whoever
+    /// publishes a library; an overlay records the version of the base it was
+    /// made on and is told when it is applied to another. Empty for a program
+    /// that is not a library (and then not written). Not editable by an
+    /// overlay.
+    std::string libraryVersion;
     std::vector<Zone> zones;
     Extras extras;
 
