@@ -10,6 +10,7 @@
 //      program exactly.
 
 #include "nd_edit.h"
+#include "nd_overlay.h"
 #include "nd_program.h"
 #include "nd_program_xml.h"
 #include "nd_xml.h"
@@ -309,6 +310,67 @@ int main() {
                   ed.prior[1] == PriorValue{0, "busDrive3", "0.7"} && ed.prior[2] == PriorValue{0, "outputLevel8", "-6.5"});
         const auto un = restoreProgramParams(e, ed.prior);
         check("...and restoring them gives the program back exactly", un.ok && e == set.program);
+    }
+
+    // ----------------------------------------------------------- oversample ---
+    group("oversample (DESIGN §3, decided 2026-11-01): a zone attribute, 2 or 4, default 4");
+    {
+        check("Oversampling numbers: \"2\" 0, \"4\" 1 (append-only)",
+              static_cast<int>(Oversampling::X2) == 0 && static_cast<int>(Oversampling::X4) == 1);
+        const ZoneParam* op = findZoneParam("oversample");
+        std::string spelled;
+        if (op)
+            for (int i = 0; i < op->numEnumNames; ++i) spelled += std::string(i ? " " : "") + op->enumNames[i];
+        check("the zone table has it, last (appended), spelled 2 4",
+              op && op == &zoneParams().back() && spelled == "2 4");
+        check("a default Zone oversamples at 4x", Zone{}.oversample == Oversampling::X4 &&
+                                                      oversamplingFactor(Zone{}.oversample) == 4);
+        const auto noAttr = parseProgram("<NassauDigitalProgram version=\"1\"><zone id=\"1\"/></NassauDigitalProgram>");
+        check("a zone with no oversample attribute reads as 4 (programs saved before keep their sound)",
+              noAttr.ok && noAttr.program.zones[0].oversample == Oversampling::X4);
+        const auto two =
+            parseProgram("<NassauDigitalProgram version=\"1\"><zone id=\"1\" oversample=\"2\"/></NassauDigitalProgram>");
+        check("oversample=\"2\" reads as 2x", two.ok && two.program.zones[0].oversample == Oversampling::X2);
+        bool refusedAll = true;
+        for (const char* bad : {"3", "8", "1", "4x", ""}) {
+            const auto r = parseProgram(std::string("<NassauDigitalProgram version=\"1\"><zone id=\"1\" oversample=\"") +
+                                        bad + "\"/></NassauDigitalProgram>");
+            refusedAll = refusedAll && !r.ok;
+        }
+        check("anything but 2 or 4 is refused (3, 8, 1, 4x, empty)", refusedAll);
+        const std::string written = writeProgram(noAttr.program);
+        check("the writer writes it, default included: oversample=\"4\"",
+              written.find(" oversample=\"4\"") != std::string::npos);
+        const auto back2 = parseProgram(writeProgram(two.program));
+        check("...and 2 round-trips as oversample=\"2\", the same program",
+              back2.ok && back2.program == two.program && writeProgram(two.program).find(" oversample=\"2\"") != std::string::npos);
+        check("equality sees it (2 != 4)", !(two.program == noAttr.program));
+
+        Program q = noAttr.program;
+        const auto toTwo = setZones(q, ZoneScope::everyZone(), {ParamEdit::absolute("oversample", "2")});
+        check("an absolute edit sets it to 2, with the replaced value recorded (\"4\")",
+              toTwo.ok && q.zones[0].oversample == Oversampling::X2 && toTwo.prior.size() == 1 &&
+                  toTwo.prior[0] == PriorValue{1, "oversample", "4"});
+        const auto rel = setZones(q, ZoneScope::everyZone(), {ParamEdit::by("oversample", 2.0)});
+        check("a relative edit is refused (a choice, not a number)", !rel.ok && q.zones[0].oversample == Oversampling::X2);
+        const auto three = setZones(q, ZoneScope::everyZone(), {ParamEdit::absolute("oversample", "3")});
+        check("an edit to 3 is refused and changes nothing", !three.ok && q.zones[0].oversample == Oversampling::X2);
+
+        // An overlay records it as a .was pair (C8), applies it and undoes it.
+        Overlay o;
+        Program current = noAttr.program;
+        const RecordedEdit rec = recordZoneEdit(o, current, ZoneScope::zones({1}), {ParamEdit::absolute("oversample", "2")});
+        const std::string verb = rec.ok && !o.edits.empty() ? writeXml(o.edits.back()) : std::string();
+        note("recorded: " + verb.substr(0, verb.empty() ? 0 : verb.size() - 1));
+        check("an overlay edit is written as oversample=\"2\" oversample.was=\"4\"",
+              rec.ok && verb == "<set-zone zone=\"1\" oversample=\"2\" oversample.was=\"4\"/>\n");
+        const auto reread = parseOverlay(writeOverlay(o));
+        const OverlayResult applied = reread.ok ? applyOverlay(noAttr.program, reread.overlay) : OverlayResult{};
+        check("...applies to the base (written and read back) with nothing drifted",
+              reread.ok && applied.program == current && applied.drifted().empty() &&
+                  applied.program.zones[0].oversample == Oversampling::X2);
+        const bool undone = undoRecordedEdit(o, current, rec);
+        check("...and undoes to 4", undone && current == noAttr.program && o.edits.empty());
     }
 
     // ---------------------------------------------------------------- C1.2 ---

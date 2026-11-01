@@ -15,7 +15,7 @@
         filterAttack="0.005" filterDecay="0.25" filterSustain="0.2" filterRelease="0.3"
         lfoRate="5.500000000000001" lfoToPitch="0.5" lfoToCutoff="-7" lfoToPan="0.25"
         velToLevel="0.8" velToCutoff="24" velToStart="441" modWheelToLfoDepth="0.9"
-        modWheelToCutoff="-12" pan="-0.3" level="-6" tune="2" choke="1" output="aux1" pad="3"
+        modWheelToCutoff="-12" pan="-0.3" level="-6" tune="2" choke="1" output="aux1" pad="3" oversample="2"
         futureZoneAttr="z">
     <layer id="2" src="audio/kick.wav" start="10" end="44100" loopStart="100" loopEnd="40000"
            beats="2" velLo="0" velHi="100" velFade="8" rrGroup="1" tune="-0.5" level="-1.5"

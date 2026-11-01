@@ -18,6 +18,13 @@
 //      on exactly the oversampler's round trip. C5's own numbers were all
 //      measured with lp24 at 20 kHz, the default then, and the fixtures here
 //      now say so.
+// Decided 2026-11-01 (DESIGN §3, §13): tube is asymmetric (even harmonics)
+//      and a driven voice's DC is blocked; oversampling is a zone attribute
+//      (2x or 4x, default 4x: byte-identical to the build before it); drive,
+//      cutoff and resonance follow a sounding voice without a click, curve,
+//      filter type and mix do not; C5.3 is defined with lp24 at 20 kHz in
+//      the path (filter off: reported); the cost budget bounds the default
+//      voice (filter off, undriven), measured with --bench, not asserted.
 // Plus R3 (no allocation in process() over the drive, filter, oversampling
 // and kit-bus paths), R8 (byte-identical across reset and block sizes with
 // all of them in use) and the per-voice cost against C2.6's budget.
@@ -71,6 +78,8 @@ Zone leftZone(PlayMode mode = PlayMode::Loop) {
     z.layers[0].pan = -1.0;
     return z;
 }
+
+Oversampling osOf(int factor) { return factor == 2 ? Oversampling::X2 : Oversampling::X4; }
 
 uint32_t installOne(Instrument& inst, Program& prog, const Zone& z, std::shared_ptr<const Sample> s) {
     prog = Program{};
@@ -150,9 +159,9 @@ Alias tenKilohertz(double rate, int factor, DriveCurve curve, bool driveAtNoteOn
                    FilterType filter = FilterType::Lp24) {
     Instrument inst;
     inst.prepare(rate);
-    inst.setOversampling(factor);
     Program prog;
     Zone z = leftZone();
+    z.oversample = osOf(factor);
     z.filter = filter;
     z.driveCurve = curve;
     z.drive = driveAtNoteOn ? 1.0 : 0.0;
@@ -182,10 +191,10 @@ Alias tenKilohertz(double rate, int factor, DriveCurve curve, bool driveAtNoteOn
 Alias tenKilohertzStage(double rate, int factor, bool adaa, DriveCurve curve, bool driveAtNoteOn) {
     VoiceFxShared sh;
     sh.build(rate);
-    sh.factor = factor;
     sh.adaa = adaa;
     VoiceFx fx;
     VoiceFxParams p;
+    p.oversample = factor;
     p.filter = FilterType::Lp24;  // stated: the stage's default is now off
     p.driveCurve = curve;
     p.drive = driveAtNoteOn ? 1.0 : 0.0;
@@ -258,13 +267,15 @@ void stageOverGolden(FilterType type, double resPercent, const std::vector<float
 
 // ns per output frame for one sounding voice (looping, so it never ends),
 // process() overhead subtracted, best of 5: C2.6's harness (interp_tests).
-double costNs(int layers, double drive, int factor, bool modulatedCutoff, FilterType filter = FilterType::Lp24) {
+double costNs(int layers, double drive, int factor, bool modulatedCutoff, FilterType filter = FilterType::Lp24,
+              DriveCurve curve = DriveCurve::Soft) {
     Instrument inst;
     inst.prepare(48000.0);
-    inst.setOversampling(factor);
     Program prog;
     Zone z = fullZone(PlayMode::Loop, 60);
+    z.oversample = osOf(factor);
     z.filter = filter;
+    z.driveCurve = curve;
     z.layers.resize(static_cast<size_t>(layers));
     z.drive = drive;
     if (modulatedCutoff) {
@@ -463,6 +474,64 @@ int main(int argc, char** argv) {
         }
     }
 
+    group("tube is asymmetric (decided 2026-11-01): even harmonics, and the DC it makes is blocked");
+    {
+        // C5.1's tone (1 kHz, -12 dBFS RMS) through each curve, filter off
+        // (so nothing but the drive and the voice's DC blocker shapes it):
+        // the 2nd and 3rd harmonic re the fundamental, and the DC left over a
+        // whole number of periods half a second in (the blocker's 5 Hz
+        // corner has a 32 ms time constant).
+        auto measure = [](DriveCurve c, double amount, double& h2, double& h3, double& dc) {
+            Instrument inst;
+            inst.prepare(kRate);
+            Program prog;
+            Zone z = leftZone();
+            z.filter = FilterType::Off;
+            z.driveCurve = c;
+            z.drive = amount;
+            installOne(inst, prog, z, Sample::mono(kRate, sine(1000.0, kRate, 1.0, kRefAmp)));
+            const Stereo a = render(inst, {on(0, 60)}, 48000);
+            const size_t from = 24000, to = 48000;
+            const double f1 = toneAmp(a.l, from, to, 1000.0, kRate);
+            h2 = db(toneAmp(a.l, from, to, 2000.0, kRate) / f1);
+            h3 = db(toneAmp(a.l, from, to, 3000.0, kRate) / f1);
+            double sum = 0;
+            for (size_t i = from; i < to; ++i) sum += a.l[i];
+            dc = db(std::fabs(sum / static_cast<double>(to - from)) / f1);
+        };
+        bool evenLeads = true, dcGone = true;
+        double worstDc = -300;
+        for (double amount : {0.25, 0.5, 1.0}) {
+            double h2, h3, dc;
+            measure(DriveCurve::Tube, amount, h2, h3, dc);
+            // The DC the curve itself makes at this amount (what the blocker
+            // takes out): the wet signal's mean over one period, C f(G x).
+            DriveTables t;
+            t.build();
+            const DriveSetting d = DriveSetting::of(t, DriveCurve::Tube, amount, 1.0);
+            double mean = 0;
+            for (int i = 0; i < 4800; ++i)
+                mean += d.comp * driveCurve(DriveCurve::Tube, d.gain * kRefAmp * std::sin(2.0 * kPi * i / 4800.0));
+            mean /= 4800.0;
+            note(fmt("tube at drive %.2f: ", amount) + fmt("2nd %.1f dB, ", h2) + fmt("3rd %.1f dB; ", h3) +
+                 fmt("DC after the blocker %.1f dB", dc) + fmt(" (the curve makes %.1f dB)", db(std::fabs(mean) / kRefAmp)));
+            evenLeads = evenLeads && h2 > h3 && h2 > -30.0;
+            dcGone = dcGone && dc < -100.0;
+            worstDc = std::max(worstDc, dc);
+        }
+        double s2 = 0, s3 = 0, sdc = 0;
+        measure(DriveCurve::Soft, 1.0, s2, s3, sdc);
+        note(fmt("soft at drive 1 for comparison (symmetric): 2nd %.1f dB, ", s2) + fmt("3rd %.1f dB", s3));
+        check("tube makes even harmonics: at drive 0.25 / 0.5 / 1 the 2nd is above -30 dB and above the 3rd",
+              evenLeads);
+        check("a symmetric curve does not (soft at drive 1: 2nd below -100 dB)", s2 < -100.0);
+        check("the DC tube makes is blocked: below -100 dB re the fundamental half a second in (worst " +
+                  fmt("%.1f dB)", worstDc),
+              dcGone);
+        // An undriven voice does not run the blocker: filter off, drive 0 is
+        // still the sample byte for byte ("filter off" below).
+    }
+
     // ---------------------------------------------------------------- C5.3 ---
     group("C5.3 aliasing: a 10 kHz sine (-12 dBFS RMS) through full drive, lp24 at 20 kHz");
     {
@@ -490,18 +559,17 @@ int main(int argc, char** argv) {
         }
         // The AC, through the instrument at its default factor, lp24 at 20 kHz
         // (C5's default filter, stated since the default became off).
-        Instrument probe;
-        probe.prepare(kRate);
+        const int defaultFactor = oversamplingFactor(Zone{}.oversample);
         double worst = -300;
         std::string row;
         for (double rate : {48000.0, 44100.0}) {
             for (int c = 0; c < 4; ++c) {
-                const Alias a = tenKilohertz(rate, probe.oversampling(), static_cast<DriveCurve>(c), true);
+                const Alias a = tenKilohertz(rate, defaultFactor, static_cast<DriveCurve>(c), true);
                 worst = std::max(worst, a.band);
                 row += fmt("  %.1f/", rate / 1000.0) + kCurveNames[c] + fmt(" %.1f", a.band) + fmt(" (@%.0f)", a.bandHz);
             }
         }
-        note("through the instrument at its default factor (" + std::to_string(probe.oversampling()) +
+        note("through the instrument at its default factor (" + std::to_string(defaultFactor) +
              "x), lp24 at 20 kHz, loudest line above fs/2 - 2 kHz, dB:" + row);
         {
             // The same with the filter off, the default since 2026-10-27
@@ -512,17 +580,18 @@ int main(int argc, char** argv) {
             for (double rate : {48000.0, 44100.0}) {
                 for (int c = 0; c < 4; ++c) {
                     const Alias a =
-                        tenKilohertz(rate, probe.oversampling(), static_cast<DriveCurve>(c), true, FilterType::Off);
+                        tenKilohertz(rate, defaultFactor, static_cast<DriveCurve>(c), true, FilterType::Off);
                     worstOff = std::max(worstOff, a.band);
                     rowOff += fmt("  %.1f/", rate / 1000.0) + kCurveNames[c] + fmt(" %.1f", a.band) +
                               fmt(" (@%.0f)", a.bandHz);
                 }
             }
-            note("the same with filter off (" + std::to_string(probe.oversampling()) + "x): " + rowOff +
+            note("the same with filter off (" + std::to_string(defaultFactor) + "x): " + rowOff +
                  fmt("; worst %.1f dB", worstOff));
         }
         note("at 48 kHz the lines of a 10 kHz tone lie on a 2 kHz grid, so the only one above 22 kHz is 24 kHz,"
-             " which a symmetric curve cannot make: 48 kHz alone would pass without oversampling (first column)");
+             " which a symmetric curve cannot make (soft, hard, fold: rounding noise only) and tube, asymmetric since"
+             " 2026-11-01, does");
         check("at the chosen factor, every curve, at 48 and 44.1 kHz: no line above fs/2 - 2 kHz louder than -80 dB (worst " +
                   fmt("%.1f dB)", worst),
               worst < -80.0);
@@ -588,9 +657,9 @@ int main(int argc, char** argv) {
               driveAfter == 1.0 && db(h3) > db(h3a) + 60.0);
         check("...but not that voice's oversampling: still 1x, and driven at the base rate (aliases above -40 dB)",
               factorAfter == 1 && driven.anywhere > -40.0);
-        check("the next note's voice is oversampled (" + std::to_string(inst.oversampling()) +
+        check("the next note's voice is oversampled (" + std::to_string(oversamplingFactor(z.oversample)) +
                   "x) and its loudest alias is 30 dB or more below the base-rate voice's",
-              factorNext == inst.oversampling() && next.anywhere < driven.anywhere - 30.0);
+              factorNext == oversamplingFactor(z.oversample) && next.anywhere < driven.anywhere - 30.0);
     }
 
     group("C5.4 an oversampled voice lines up with one that is not (latency compensated)");
@@ -601,9 +670,9 @@ int main(int argc, char** argv) {
             for (int k = 0; k < 2; ++k) {
                 Instrument inst;
                 inst.prepare(kRate);
-                inst.setOversampling(factor);
                 Program prog;
                 Zone z = leftZone(PlayMode::Gated);
+                z.oversample = osOf(factor);
                 z.drive = (k == 0) ? 0.0 : 1e-9;  // no audible drive: just the oversampled path
                 z.filter = FilterType::Hp12;
                 z.cutoff = 20.0;
@@ -618,12 +687,7 @@ int main(int argc, char** argv) {
             }
             note(std::to_string(factor) + "x: the click peaks at frame " + std::to_string(at[1]) +
                  " oversampled, " + std::to_string(at[0]) + " not (note-on at 100; chain latency " +
-                 std::to_string([&] {
-                     Instrument i;
-                     i.prepare(kRate);
-                     i.setOversampling(factor);
-                     return i.oversamplingLatency();
-                 }()) + " frames)");
+                 std::to_string(Resampler::latency(factor)) + " frames)");
             check(std::to_string(factor) + "x: the oversampled voice's click peaks on the same frame", at[0] == at[1]);
         }
         // A short burst that ends: the oversampled voice still plays it to
@@ -654,6 +718,214 @@ int main(int argc, char** argv) {
         check("an oversampled voice plays a burst to its end, as the plain voice does (RMS within 0.1 dB, every frame "
               "within -60 dB)",
               std::fabs(db(e1 / e0)) < 0.1 && maxDiff < 0.5e-3);
+    }
+
+    group("oversampling is a zone setting (DESIGN §3, decided 2026-11-01): 2x or 4x, default 4x");
+    {
+        // Two driven zones in one program, one at 2x, one at 4x: each voice
+        // runs at its own zone's factor (the tap reports it per voice).
+        struct TapLog {
+            int factorOf[128] = {};
+            static void record(void* user, const ModulationFrame& f) {
+                static_cast<TapLog*>(user)->factorOf[f.key] = f.oversampling;
+            }
+        } log;
+        {
+            Instrument inst;
+            inst.prepare(kRate);
+            inst.setModulationTap(&TapLog::record, &log);
+            Program prog;
+            Zone z2 = leftZone();
+            z2.keyLo = z2.keyHi = 60;
+            z2.drive = 0.5;
+            z2.oversample = Oversampling::X2;
+            Zone z4 = z2;
+            z4.keyLo = z4.keyHi = 62;
+            z4.oversample = Oversampling::X4;
+            Zone zu = z2;  // undriven, at 2x: not oversampled at all
+            zu.keyLo = zu.keyHi = 64;
+            zu.drive = 0.0;
+            addZone(prog, z2);
+            addZone(prog, z4);
+            addZone(prog, zu);
+            install(inst, prog);
+            for (const Zone& z : prog.zones) inst.setSample(z.layers[0].id, Sample::mono(kRate, sine(1000.0, kRate, 1.0, kRefAmp)));
+            render(inst, {on(0, 60), on(0, 62), on(0, 64)}, 4800);
+            inst.setModulationTap(nullptr, nullptr);
+        }
+        note("per voice, one program: zone at 2x -> " + std::to_string(log.factorOf[60]) + "x, zone at 4x -> " +
+             std::to_string(log.factorOf[62]) + "x, undriven zone at 2x -> " + std::to_string(log.factorOf[64]) + "x");
+        check("each driven voice runs at its own zone's factor (2 and 4 side by side); an undriven one at 1x",
+              log.factorOf[60] == 2 && log.factorOf[62] == 4 && log.factorOf[64] == 1);
+
+        // The default is 4x and unchanged: a zone with no oversample setting
+        // renders byte for byte as one that says 4, over every curve, lp24
+        // and off, at two amounts; 2 renders differently. (Before this
+        // change the same renders were compared against the build without
+        // the attribute: identical; docs/GATES.md C5.)
+        auto renderWith = [](DriveCurve c, FilterType f, double drive, int os) {
+            Instrument inst;
+            inst.prepare(kRate);
+            Program prog;
+            Zone z = fullZone(PlayMode::Loop, 60);
+            z.filter = f;
+            z.cutoff = 3000.0;
+            z.resonance = 0.4;
+            z.driveCurve = c;
+            z.drive = drive;
+            if (os) z.oversample = osOf(os);
+            addZone(prog, z);
+            install(inst, prog);
+            inst.setSample(prog.zones[0].layers[0].id, Sample::stereo(44100.0, noise(30000, 5), noise(30000, 6)));
+            return render(inst, {on(0, 60), on(5000, 67), off(20000, 60)}, 40000, 37);
+        };
+        int sameAs4 = 0, differAt2 = 0, cases = 0;
+        for (int c = 0; c < 4; ++c)
+            for (FilterType f : {FilterType::Lp24, FilterType::Off})
+                for (double drive : {0.3, 1.0}) {
+                    const Stereo d = renderWith(static_cast<DriveCurve>(c), f, drive, 0);
+                    ++cases;
+                    if (same(d, renderWith(static_cast<DriveCurve>(c), f, drive, 4))) ++sameAs4;
+                    if (!same(d, renderWith(static_cast<DriveCurve>(c), f, drive, 2))) ++differAt2;
+                }
+        note(std::to_string(cases) + " driven renders: default == oversample 4 in " + std::to_string(sameAs4) +
+             ", default != oversample 2 in " + std::to_string(differAt2));
+        check("the default is 4x: byte-identical to oversample=\"4\" in every case (cmp)", sameAs4 == cases);
+        check("...and 2x is a different render in every case", differAt2 == cases);
+        const bool undrivenSame = same(renderWith(DriveCurve::Fold, FilterType::Lp24, 0.0, 2),
+                                       renderWith(DriveCurve::Fold, FilterType::Lp24, 0.0, 4));
+        check("an undriven zone renders the same at 2 and 4 (it is not oversampled)", undrivenSame);
+
+        // What 2x costs in aliasing (C5.3's tone, lp24 at 20 kHz, 44.1 kHz):
+        // the user's choice, reported.
+        std::string row;
+        for (int c = 0; c < 4; ++c)
+            row += std::string("  ") + kCurveNames[c] +
+                   fmt(" %.1f", tenKilohertz(44100.0, 2, static_cast<DriveCurve>(c), true).band);
+        note("a zone at 2x, C5.3's tone at 44.1 kHz, lp24 at 20 kHz, loudest line above fs/2 - 2 kHz, dB:" + row);
+    }
+
+    group("drive, cutoff and resonance follow a sounding voice, smoothly (DESIGN §3, decided 2026-11-01)");
+    {
+        // A low sine (110 Hz, -12 dBFS RMS, a whole number of periods,
+        // looped), lp24, one note. Mid-note the program changes one of the
+        // three (a new snapshot, as qbx sends). Heard: the voice comes to sound
+        // as a note started with the new value does. Smooth: a click is
+        // broadband, and a sine through a linear filter has nothing up there,
+        // so the measure is the transition's high band, the largest third
+        // difference (a high-pass rising 18 dB/oct) in the 2048 frames after
+        // the change, in dB re the tone's amplitude, against the same measure
+        // in the settled sound before and after.
+        const double f0 = 100.0;  // 480 frames a period at 48 kHz
+        const std::vector<float> tone = sine(f0, kRate, 1.0, kRefAmp);
+        struct Case {
+            const char* name;
+            double cut0, res0, drive0, cut1, res1, drive1;
+            double probeHz;  // the line that shows the change
+        } cases[] = {{"cutoff 8 kHz -> 60 Hz", 8000.0, 0.3, 0.0, 60.0, 0.3, 0.0, 100.0},
+                     {"cutoff 60 Hz -> 8 kHz", 60.0, 0.3, 0.0, 8000.0, 0.3, 0.0, 100.0},
+                     {"resonance 0 -> 0.95 (cutoff 100 Hz)", 100.0, 0.0, 0.0, 100.0, 0.95, 0.0, 100.0},
+                     {"resonance 0.95 -> 0 (cutoff 100 Hz)", 100.0, 0.95, 0.0, 100.0, 0.0, 0.0, 100.0},
+                     {"drive 0.05 -> 1 (soft, 4x, lp24 at 20 kHz)", 20000.0, 0.0, 0.05, 20000.0, 0.0, 1.0, 300.0},
+                     {"drive 1 -> 0.05", 20000.0, 0.0, 1.0, 20000.0, 0.0, 0.05, 300.0}};
+        const int64_t at = 24000 + 13;  // the change: not on a host or control-block boundary
+        bool allHeard = true, allSmooth = true;
+        double worst = -300;
+        for (const Case& c : cases) {
+            auto make = [&](double cut, double res, double drive) {
+                Zone z = leftZone();
+                z.cutoff = cut;
+                z.resonance = res;
+                z.drive = drive;
+                return z;
+            };
+            Instrument inst;
+            inst.prepare(kRate);
+            Program prog;
+            installOne(inst, prog, make(c.cut0, c.res0, c.drive0), Sample::mono(kRate, tone));
+            Stereo out;
+            out.l.assign(72000, 0.0f);
+            out.r.assign(72000, 0.0f);
+            std::vector<Event> ev;
+            ev.reserve(2);
+            renderInto(inst, {on(0, 60)}, at, out, ev);
+            prog.zones[0].cutoff = c.cut1;
+            prog.zones[0].resonance = c.res1;
+            prog.zones[0].drive = c.drive1;
+            install(inst, prog);
+            Stereo rest;
+            rest.l.assign(static_cast<size_t>(72000 - at), 0.0f);
+            rest.r.assign(rest.l.size(), 0.0f);
+            renderInto(inst, {}, 72000 - at, rest, ev, 256, at);
+            std::copy(rest.l.begin(), rest.l.end(), out.l.begin() + at);
+            // A note started with the new values: what the change should sound like.
+            Instrument ref;
+            ref.prepare(kRate);
+            Program refProg;
+            installOne(ref, refProg, make(c.cut1, c.res1, c.drive1), Sample::mono(kRate, tone));
+            const Stereo want = render(ref, {on(0, 60)}, 48000);
+            const size_t n = 9600;  // whole periods
+            const double before = db(toneAmp(out.l, 9600, 9600 + n, c.probeHz, kRate));
+            const double after = db(toneAmp(out.l, 48000, 48000 + n, c.probeHz, kRate));
+            const double target = db(toneAmp(want.l, 24000, 24000 + n, c.probeHz, kRate));
+            auto band = [&](size_t from, size_t to) {
+                double d = 0;
+                for (size_t i = from; i < to; ++i)
+                    d = std::max(d, std::fabs(double(out.l[i]) - 3.0 * out.l[i - 1] + 3.0 * out.l[i - 2] - out.l[i - 3]));
+                return db(d / kRefAmp);
+            };
+            const double own = std::max(band(9600, 9600 + n), band(48000, 48000 + n));
+            const double ch = band(static_cast<size_t>(at), static_cast<size_t>(at) + 2048);
+            const bool heard = std::fabs(after - target) < 0.5 && std::fabs(after - before) > 6.0;
+            const bool smooth = ch <= std::max(own, -80.0) + 6.0;
+            allHeard = allHeard && heard;
+            allSmooth = allSmooth && smooth;
+            worst = std::max(worst, ch - std::max(own, -80.0));
+            note(std::string(c.name) + fmt(": %.0f Hz line ", c.probeHz) + fmt("%.1f dB before, ", before) +
+                 fmt("%.1f after, ", after) + fmt("%.1f in a note started so; ", target) +
+                 fmt("high band at the change %.1f dB", ch) + fmt(", settled %.1f dB", own));
+        }
+        check("each change is heard in the sounding voice: the line moves by more than 6 dB, to within 0.5 dB of a note "
+              "started with the new value",
+              allHeard);
+        check("...without a click: the change's high band no more than 6 dB above the settled sound's (or -80 dB) (worst " +
+                  fmt("%+.1f dB)", worst),
+              allSmooth);
+        {
+            // What does not follow: curve, filter type and mix stay as at
+            // note-on. A mid-note change of all three renders the note byte
+            // for byte as no change does (the next note takes them).
+            auto run = [&](bool change) {
+                Instrument inst;
+                inst.prepare(kRate);
+                Program prog;
+                Zone z = leftZone();
+                z.drive = 0.6;
+                z.cutoff = 3000.0;
+                installOne(inst, prog, z, Sample::mono(kRate, tone));
+                Stereo out;
+                out.l.assign(24000, 0.0f);
+                out.r.assign(24000, 0.0f);
+                std::vector<Event> ev;
+                ev.reserve(2);
+                renderInto(inst, {on(0, 60)}, 9600, out, ev);
+                if (change) {
+                    prog.zones[0].driveCurve = DriveCurve::Fold;
+                    prog.zones[0].filter = FilterType::Hp12;
+                    prog.zones[0].driveMix = 0.5;
+                    install(inst, prog);
+                }
+                Stereo rest;
+                rest.l.assign(14400, 0.0f);
+                rest.r.assign(14400, 0.0f);
+                renderInto(inst, {}, 14400, rest, ev, 256, 9600);
+                std::copy(rest.l.begin(), rest.l.end(), out.l.begin() + 9600);
+                std::copy(rest.r.begin(), rest.r.end(), out.r.begin() + 9600);
+                return out;
+            };
+            check("curve, filter type and mix changed mid-note: the sounding note is byte-identical to no change (cmp)",
+                  same(run(false), run(true)));
+        }
     }
 
     // ---------------------------------------------------------------- C5.5 ---
@@ -811,9 +1083,9 @@ int main(int argc, char** argv) {
         // This pins the bypass where the 1x shortcut does not apply.
         VoiceFxShared sh;
         sh.build(kRate);
-        sh.factor = 4;
         VoiceFx fx;
         VoiceFxParams p;
+        p.oversample = 4;
         p.filter = FilterType::Off;
         p.drive = 1.0;
         p.driveMix = 0.0;
@@ -914,7 +1186,6 @@ int main(int argc, char** argv) {
         for (int factor : {2, 4}) {
             Instrument inst;
             inst.prepare(kRate);
-            inst.setOversampling(factor);
             Program prog;
             prog.polyphony = 16;
             for (int t = 0; t < 5; ++t) {  // lp24, lp12, hp12, hp24, off
@@ -930,6 +1201,7 @@ int main(int argc, char** argv) {
                 z.filterSustain = 0.0;
                 z.drive = (t % 2) ? 0.7 : 0.0;
                 z.driveCurve = static_cast<DriveCurve>(t % 4);
+                z.oversample = osOf(factor);
                 addZone(prog, z);
             }
             const auto programs = std::make_shared<const Program>(prog);
@@ -979,26 +1251,36 @@ int main(int argc, char** argv) {
         if (!bench) {
             note("run `fx_tests --bench` for the numbers (skipped in the suite: timing is not a pass/fail matter here)");
         } else {
+            // The budget (DESIGN §13, decided 2026-11-01): 40 ns for one
+            // layer and 140 ns for four bound the DEFAULT voice, filter off
+            // and undriven. Everything else is measured and reported here,
+            // not bounded. Not asserted in the suite either way: wall-clock
+            // timing under a CI runner's load is not a pass/fail matter.
+            const double d1 = costNs(1, 0.0, 4, false, FilterType::Off);
+            const double d4 = costNs(4, 0.0, 4, false, FilterType::Off);
+            note(fmt("the default voice (filter off, undriven): 1 layer %.1f ns (budget 40), ", d1) +
+                 fmt("4 layers %.1f ns (budget 140)", d4));
             struct C {
                 const char* name;
                 int layers;
                 double drive;
                 int factor;
                 bool mod;
-            } cases[] = {{"1 layer, drive 0, static cutoff", 1, 0.0, 4, false},
-                         {"1 layer, drive 0, cutoff moving", 1, 0.0, 4, true},
-                         {"1 layer, drive 0.5, 2x", 1, 0.5, 2, false},
-                         {"1 layer, drive 0.5, 4x", 1, 0.5, 4, false},
-                         {"1 layer, drive 0.5, 4x, cutoff moving", 1, 0.5, 4, true},
-                         {"4 layers, drive 0, static cutoff", 4, 0.0, 4, false},
-                         {"4 layers, drive 0.5, 2x", 4, 0.5, 2, false},
-                         {"4 layers, drive 0.5, 4x", 4, 0.5, 4, false}};
+                FilterType filter;
+            } cases[] = {{"1 layer, drive 0, lp24 static cutoff", 1, 0.0, 4, false, FilterType::Lp24},
+                         {"1 layer, drive 0, lp24 cutoff moving", 1, 0.0, 4, true, FilterType::Lp24},
+                         {"1 layer, drive 0.5 (soft), 2x, filter off", 1, 0.5, 2, false, FilterType::Off},
+                         {"1 layer, drive 0.5 (soft), 4x, filter off", 1, 0.5, 4, false, FilterType::Off},
+                         {"1 layer, drive 0.5 (soft), 2x, lp24", 1, 0.5, 2, false, FilterType::Lp24},
+                         {"1 layer, drive 0.5 (soft), 4x, lp24", 1, 0.5, 4, false, FilterType::Lp24},
+                         {"1 layer, drive 0.5 (soft), 4x, lp24 cutoff moving", 1, 0.5, 4, true, FilterType::Lp24},
+                         {"4 layers, drive 0, lp24 static cutoff", 4, 0.0, 4, false, FilterType::Lp24},
+                         {"4 layers, drive 0.5 (soft), 2x, lp24", 4, 0.5, 2, false, FilterType::Lp24},
+                         {"4 layers, drive 0.5 (soft), 4x, lp24", 4, 0.5, 4, false, FilterType::Lp24}};
             for (const C& c : cases)
-                note(std::string(c.name) + ", lp24: " + fmt("%.1f ns", costNs(c.layers, c.drive, c.factor, c.mod)));
-            // The default since 2026-10-27: filter off (DESIGN §3).
-            note("1 layer, drive 0, filter off: " + fmt("%.1f ns", costNs(1, 0.0, 4, false, FilterType::Off)));
-            note("4 layers, drive 0, filter off: " + fmt("%.1f ns", costNs(4, 0.0, 4, false, FilterType::Off)));
-            note("1 layer, drive 0.5, 4x, filter off: " + fmt("%.1f ns", costNs(1, 0.5, 4, false, FilterType::Off)));
+                note(std::string(c.name) + ": " + fmt("%.1f ns", costNs(c.layers, c.drive, c.factor, c.mod, c.filter)));
+            note("1 layer, drive 0.5 (tube), 4x, lp24: " +
+                 fmt("%.1f ns", costNs(1, 0.5, 4, false, FilterType::Lp24, DriveCurve::Tube)));
         }
     }
 

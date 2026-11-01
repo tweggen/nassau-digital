@@ -10,11 +10,12 @@
 //
 // The bus has one drive and nothing pluggable (DESIGN §1). Its amount is the
 // program's busDrive; the program has no curve for it, so the bus uses the
-// `soft` curve (nd_drive.h), mix 1. (Which curve, and whether the program
-// should name one, is the author's question; see the C5 PR.)
+// `soft` curve (nd_drive.h), mix 1: fixed, with no attribute (DESIGN §13,
+// decided 2026-11-01).
 //
 // Oversampling (DESIGN §3): the bus oversamples while its drive is above
-// zero, at the voices' factor, and the change is ramped over one block.
+// zero, at VoiceFxShared::factor (4x, as built; a voice takes its zone's own
+// factor since 2026-11-01), and the change is ramped over one block.
 // busDrive 0 is an exact bypass with no delay, so a program without bus drive
 // renders exactly as before this stage existed. When the drive goes above
 // zero, the oversampled chain starts from rest and the output crossfades from
@@ -127,8 +128,7 @@ private:
     inline double chain(int c, const DriveSetting& d, double x) {
         double u[Resampler::kMaxFactor];
         rs_[c].up(x, u);
-        // The chain's own factor: the instrument's may have changed since the
-        // chain started (it takes effect at the next switch-on).
+        // The chain's own factor, as it was set at switch-on.
         for (int j = 0; j < rs_[c].factor(); ++j) u[j] = driveShape(d, kCurve, sh_->adaa, dc_[c], u[j]);
         return rs_[c].down(u);
     }

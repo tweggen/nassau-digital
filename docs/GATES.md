@@ -171,7 +171,9 @@ twice as much and is 54 dB cleaner at 10 kHz.
 v3 at 3.5 GHz: **one layer ≤ 40 ns per output frame** (measured 29.2 mono at
 the root key, 35.6 stereo pitched, so 0.17 % of a core at 48 kHz), **four
 layers ≤ 140 ns** (measured 129.4). Drive and filter (C5) come on top and get
-their own share there.
+their own share there. *(2026-11-01, the author: the budget bounds only the
+default voice, filter `off` and undriven; filtered and driven voices are
+measured and reported, not bounded. C5 has the numbers.)*
 
 * **C2.1** A sine sample at root key 60, played on 72, measures 2.000 ± 0.001 ×
   the frequency on 60 (autocorrelation).
@@ -292,7 +294,10 @@ sounding voice, no latency compensation (peak 39/47 frames late), no tail
 0.0138), the bus ramping across the host's block (block sizes differ), a
 heap buffer in the stage (425154 allocations).
 
-**Per-voice cost against C2.6 — the budget is missed** (Release, Xeon E5-1650
+**Per-voice cost against C2.6 — the budget is missed** *(superseded
+2026-11-01: the budget now bounds only the default voice, filter `off` and
+undriven, which meets it; these lp24 and driven numbers are reported, not
+bounded; see below)* (Release, Xeon E5-1650
 v3, load 3.6–4.2 on 12 cores from another job, best of 5, three runs):
 one layer, drive 0, lp24 static **67–69 ns** (≤ 40), cutoff moving 82–84;
 drive 0.5 at 2× 186–191, at 4× **319–326**, 4× with the cutoff moving
@@ -334,22 +339,108 @@ ns, four layers 136.8 (lp24 68.6 / 164.9 in the same run; C2's filterless
 **C5.3 with the filter off misses** at 44.1 kHz (the AC was defined and
 passed with lp24 at 20 kHz in the path): soft −133.9, tube **−73.0**, hard
 −103.6, fold **−76.0** dB, lines at 21.3 / 20.8 kHz that lp24 at 20 kHz had
-attenuated (48 kHz: none). Shown by `fx_tests` as a note, not a check. Open
-for the author.
+attenuated (48 kHz: none). Shown by `fx_tests` as a note, not a check.
+*(Settled 2026-11-01: C5.3 is defined with lp24 at 20 kHz in the path; with
+the filter off the numbers are reported, not bounded; see below.)*
+
+**The author's decisions of 2026-11-01, built** (DESIGN §3, §4.2, §4.3, §13).
+`Tests/fx_tests` 47/47, `Tests/program_tests` 103/103; every other suite
+prints the same measurements as main (timings aside).
+*tube is asymmetric*: a biased triode, (1+b)²(T(x+b) − T(b)) with
+T(u) = u/(1+|u|) and b = 1 (one division a branch, no transcendental;
+ceilings +2 / −6), replacing the symmetric x/(1+|x|); still without an
+antiderivative (it has a logarithm). C5.1's tone (1 kHz, −12 dBFS RMS,
+filter off) at drive 0.25 / 0.5 / 1: 2nd harmonic −15.8 / −10.5 / −13.8 dB,
+3rd −31.6 / −21.5 / −17.1 dB re the fundamental (soft at drive 1: 2nd
+−218.9). (At b = 0.5 the 3rd led at drive 1; at 0 dBFS input the 3rd leads,
+as an overdriven triode does.) *DC blocker*: a one-pole high-pass at 5 Hz on
+the drive's wet signal (its pole set at note-on for the stage's rate; the dry
+share is not filtered), run whenever the drive runs, so an undriven voice
+never runs it. The curve makes DC at −16.1 / −11.5 / −8.6 dB re the input;
+half a second in, the output's DC is −179.6 / −167.9 / −166.6 dB re the
+fundamental. *Oversampling is a zone attribute*, `oversample="2"` or `"4"`
+(an appended enum, default `"4"`, last in the zone table), latched at
+note-on; an undriven voice is not oversampled whatever it says. The C1
+writer writes it, defaults included; anything but 2 or 4 is refused; a
+relative edit is refused (a choice, not a number); an overlay records it as
+`oversample="2" oversample.was="4"`, applies it with nothing drifted and
+undoes it. Two driven zones at 2× and 4× in one program run at 2× and 4×
+side by side (the tap, per voice), an undriven one at 1×; 16 driven renders
+(every curve, lp24 and off, drive 0.3 and 1): the default byte-identical to
+`"4"` in all 16, `"2"` different in all 16; with the attribute alone (before
+the tube and DC blocker changes) the same 16 renders hashed identically to
+the build before it (9983f1a), so 4× is today's sound. The instrument's
+`setOversampling()` / `oversampling()` are gone; `oversamplingLatency()` is
+the kit bus's delay (4×, 47 frames, as built). At 2×, C5.3's tone at 44.1 kHz
+(lp24 at 20 kHz): soft −68.4, tube −52.5, hard −82.5, fold −48.9 dB, the
+user's choice. *Drive, cutoff and resonance follow a sounding voice*,
+glided over 16 control blocks (512 frames, 10.7 ms at 48 kHz) from the
+value it had to the new one, linearly (drive, resonance) or at a constant
+ratio per block (cutoff), then ramped within each block as before; an
+unchanged value is the zone's own, bit for bit. A 100 Hz sine (−12 dBFS),
+lp24, changed mid-note: cutoff 8 kHz → 60 Hz and back, resonance 0 → 0.95
+and back (cutoff 100 Hz), drive 0.05 → 1 and back (soft): each line moves
+by 15.7–22.2 dB to within 0.0 dB of a note started with the new value;
+the high band at the change (largest third difference in the 2048 frames
+after it, re the tone) −92.1 / −86.7 / −107.7 / −103.5 / −70.1 / −69.8 dB
+against the settled sound's −116.9 / −116.9 / −103.5 / −103.3 / −71.9 /
+−71.9 (bound: 6 dB above the settled sound or −80 dB; worst +2.1 dB). Glides
+of 8 blocks measured +12.9 dB (drive) and of 1 block +48.3 dB. Curve, filter
+type and mix changed mid-note leave the sounding note byte-identical (cmp).
+*Moved numbers*, each from the new tube or the blocker, none relaxed:
+C5.1 worst 0.003 → 0.004 dB (fold, drive 0.75: the blocker's 5 Hz corner
+on the wet share); tube's compensation off the reference level at drive 1,
+−18 dBFS +3.86 → +2.82 dB, −6 dBFS −4.59 → −4.37 dB (a new curve). C5.3, lp24
+at 20 kHz, 4×: 44.1 kHz tube −84.1 → −84.3 dB; **48 kHz tube −82.8 dB at
+24 kHz** where there was no line (an asymmetric curve makes the 12th
+harmonic, which folds onto fs/2; soft, hard and fold read −182 … −218, rounding
+noise from the blocker where they read exactly 0 before); the worst of the AC
+is now −82.8 dB (was −84.1). Filter off, reported: 48 kHz tube −70.0, 44.1
+kHz soft −133.8, tube −73.2, hard −103.6, fold −76.0 dB. C5.2, C5.4, C5.5, R8
+and R3 unchanged; nassau-dsp's filter_golden untouched. Each watched
+failing: the voice ignoring its zone's factor (2 checks), the default 2×
+(4 fx checks, 7 program checks), cutoff, resonance or drive not reaching the
+sounding voice (the follow check; drive also 3 C5.4 checks), mix following
+(the byte check), the glide 1 block (+48.3 dB), the tube bias 0 (the even
+harmonic check), the DC blocker a pass-through (DC −8.3 dB).
+*Cost* (`fx_tests --bench`, Release, Xeon E5-1650 v3, load 6.9–9.6 on 12
+cores from other jobs, best of 5, five runs): the default voice 37.6–39.5 ns
+one layer (budget 40), **134.1–148.3** four layers (budget 140), against
+main's 39.3–60.4 / 140.3–190.6 run alternately in the same session: the
+four-layer budget is met only on a quiet box, and this change does not move it (it adds three glide steps per
+32-frame block). Reported, not bounded (quietest run): one layer lp24 65.3,
+cutoff moving 79.8; drive 0.5 soft filter off 2× 128.0, 4× 208.7; lp24 2×
+180.6, 4× 309.5, 4× cutoff moving 368.4; tube 4× lp24 289.6; four layers lp24
+163.0, driven 2× 275.6, 4× 406.6. No wall-clock assertion in the suite.
+The kit bus stays fixed `soft`, 4×, 47 frames late while on (as built).
 
 * **C5.1** Each drive curve's output RMS at moderate input stays within ± 1 dB
   of the input (output compensation).
 * **C5.2** The ladder and SVF match nassau-analogue's goldens for the same
   input and settings (`cmp`), because they are the same code.
 * **C5.3** Aliasing: a 10 kHz sine through full drive at the chosen
-  oversampling factor has no component above 0.5·fs − 2 kHz louder than
-  −80 dB relative to the fundamental.
+  oversampling factor (the zone default, 4×), **with lp24 at 20 kHz in the
+  path** (defined so on 2026-11-01), has no component above 0.5·fs − 2 kHz
+  louder than −80 dB relative to the fundamental. With the filter `off` the
+  same numbers are printed as a report, not checked.
 * **C5.4** A zone with drive 0 at note-on runs without oversampling; automating
   its drive above 0 mid-note changes the sound but not the oversampling of
-  that voice (the next note's voice is oversampled).
+  that voice (the next note's voice is oversampled, at its zone's factor).
 * **C5.5** Two overlapping hits through the kit-bus drive show intermodulation
   products absent when each hit is rendered alone and summed (measured
   spectrum difference).
+* *(added 2026-11-01)* **C5.6** `tube` makes even harmonics (2nd above the
+  3rd at the reference level) and the DC it makes is blocked on the voice.
+* *(added 2026-11-01)* **C5.7** Oversampling is a zone attribute (2× or 4×,
+  default 4×): both work, the default renders as 4× byte for byte, and it
+  reads, writes, compares and edits (overlay `.was` pairs) like any other.
+* *(added 2026-11-01)* **C5.8** Drive, cutoff and resonance changed mid-note
+  are heard in the sounding voice, without a click (measured); curve, filter
+  type and mix are not.
+* *(2026-11-01)* **Budget**: C2.6's 40 ns (one layer) and 140 ns (four
+  layers) bound the default voice (filter `off`, undriven), measured with
+  `fx_tests --bench` and stated with the box's load; filtered and driven
+  voices are measured and reported. No wall-clock check runs in the suite.
 
 ### C6 — Outputs
 
