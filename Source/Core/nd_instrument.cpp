@@ -628,18 +628,29 @@ struct Instrument::Impl {
             VoiceLayer& L = v.layers[v.numLayers];
             L.sample = *ref;
             L.channels = s->channels();
-            L.hi = (lr.end < 0) ? s->frames() : std::min<int64_t>(lr.end, s->frames());
-            L.lo = std::min<int64_t>(std::max<int64_t>(lr.start, 0), L.hi);
+            // A stretch zone in a tempo mode plays a buffer the host rendered
+            // to the tempo, timeScale() times as long as the source its
+            // positions were set on (DESIGN §5; §13, settled 2026-11-02): the
+            // positions are scaled into that buffer here, at note-on. Every
+            // other zone, and a sample of scale 1, reads them as they are.
+            const double ts = (tempoMode && z.tempoMethod == TempoMethod::Stretch) ? s->timeScale() : 1.0;
+            auto scaled = [ts](int64_t p) -> int64_t {
+                return (p < 0 || ts == 1.0) ? p : static_cast<int64_t>(std::llround(static_cast<double>(p) * ts));
+            };
+            const int64_t pStart = scaled(lr.start), pEnd = scaled(lr.end);
+            const int64_t pLoopStart = scaled(lr.loopStart), pLoopEnd = scaled(lr.loopEnd);
+            L.hi = (pEnd < 0) ? s->frames() : std::min<int64_t>(pEnd, s->frames());
+            L.lo = std::min<int64_t>(std::max<int64_t>(pStart, 0), L.hi);
             L.loop = (z.mode == PlayMode::Loop || z.mode == PlayMode::TempoLoop);
-            L.loopLo = (lr.loopStart < 0) ? L.lo : clampInt(lr.loopStart, L.lo, L.hi);
-            L.loopHi = (lr.loopEnd < 0) ? L.hi : clampInt(lr.loopEnd, L.loopLo, L.hi);
+            L.loopLo = (pLoopStart < 0) ? L.lo : clampInt(pLoopStart, L.lo, L.hi);
+            L.loopHi = (pLoopEnd < 0) ? L.hi : clampInt(pLoopEnd, L.loopLo, L.hi);
             if (L.loopHi - L.loopLo < 2) L.loop = false;
             L.reverse = lr.reverse;
             if (L.hi - L.lo < 1) continue;
             // velocity -> sample start: velToStart frames later at velocity 0,
             // none at 127 (DESIGN §4.4). A reversed layer starts that much
             // earlier from its end.
-            const double skip = std::floor(z.velToStart * (1.0 - v01));
+            const double skip = std::floor(z.velToStart * (1.0 - v01) * ts);
             L.pos = L.reverse ? static_cast<double>(L.hi - 1) - skip : static_cast<double>(L.lo) + skip;
             if (L.pos < static_cast<double>(L.lo) || L.pos >= static_cast<double>(L.hi)) continue;
             L.factor = std::exp2(lr.tune / 12.0) * s->sampleRate() / sampleRate;

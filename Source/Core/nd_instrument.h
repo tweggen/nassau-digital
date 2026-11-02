@@ -224,7 +224,9 @@ public:
     /// a change makes no step. A non-finite or non-positive tempo is ignored.
     /// Allocation-free; call it between process() calls (the host's tempo at
     /// the block's start). Unaffected: the `stretch` method (the host hands a
-    /// buffer already rendered to the tempo) and layers with beats = 0.
+    /// buffer already rendered to the tempo, and its Sample::timeScale() scales
+    /// the layer's positions into it at note-on, DESIGN §13 2026-11-02) and
+    /// layers with beats = 0.
     void setTempo(double bpm);
     double tempo() const;
 

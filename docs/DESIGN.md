@@ -281,6 +281,12 @@ key triggers it, so key tracking does not transpose it (both settled
 `tempo-loop`, and the host passes the tempo per block (`setTempo()`), as
 built. What follows is about **stretch** only.
 
+The stretched buffer is longer or shorter than the source the layer's
+positions were set on, so the host hands it with a **time scale**, its length
+over the source's (1 by default), and the core multiplies a `stretch` zone's
+`start`, `end`, `loopStart`, `loopEnd` and velocity-to-start skip by it at
+note-on; the program keeps source frames (settled 2026-11-02, §13).
+
 The vocoder renders large blocks on worker threads and never runs on the audio
 path, so a tempo layer is **rendered ahead** into a new generation of its
 sample (§6.1). It is rendered again when the tempo changes and once more when
@@ -721,3 +727,17 @@ GATES.md records as built):
   undoable, and leaves orphans orphaned.
 
 The C8 items above are built (§8, §12; GATES.md C8, 2026-11-01).
+
+**Settled on 2026-11-02** (the author, answering QBX-268's question; applied
+in §5 and built with it):
+
+* **Positions in a stretched buffer: option A.** A host-supplied sample
+  carries a **time scale**, the stretched length over the source length,
+  default 1 (`Sample::timeScale()`). For a `stretch` zone in a tempo mode the
+  core multiplies `start`, `end`, `loopStart`, `loopEnd` and the `velToStart`
+  skip by it at note-on (rounded to the nearest frame); every other zone
+  ignores it. The program keeps source frames, so a host never rewrites a
+  program attribute. (Option B, the host publishing rescaled positions, was
+  not taken.)
+* tune, master tune and LFO pitch still apply to the read rate in tempo
+  modes, accepted as is for now (a zone with tune ≠ 0 drifts off tempo).

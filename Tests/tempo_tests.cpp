@@ -9,6 +9,8 @@
 // Also: tempo-oneshot lasts its length scaled by the tempo and ignores
 //      note-off; the stretch method and beats = 0 leave the rate alone; the
 //      bytes are deterministic with tempo changes; no allocation in process().
+// And the author's answer of 2026-11-02 (DESIGN §13): a stretch zone's
+//      positions are scaled by the host's Sample::timeScale() at note-on.
 // And the author's decisions of 2026-11-01 (DESIGN §13): `beats` spans the
 //      loop [loopStart, loopEnd), not the played length, and a lead-in plays
 //      at the same rate; tempo modes ignore the key (every key plays at the
@@ -256,6 +258,147 @@ int main() {
         note(buf);
         check("tempo-oneshot with loop points: the loop sets the rate, the whole layer plays once: 2100 ms +- 1 ms",
               std::fabs(endMs - 2100.0) <= 1.0 && std::fabs(1200.0 * std::log2(fTail / 2500.0)) <= 1.0);
+    }
+
+    // ------------------------------------- stretch: the sample's time scale ---
+    group("stretch: a host-rendered buffer timeScale() times the source's length scales start, end, loop points and "
+          "the velToStart skip (DESIGN §13, settled 2026-11-02)");
+    {
+        // The source: the lead-in / loop / tail layer above (0.25 s of 2 kHz,
+        // the 2-beat 1 s loop, 0.5 s of 3 kHz), its positions in SOURCE
+        // frames. The host's stretch to 100 BPM, rendered here as the ideal
+        // stretch would (pitch kept, every part 1.2 x as long): 0.3 s of
+        // 2 kHz, the swell loop over 1.2 s (1200 whole cycles of 1 kHz), 0.6 s
+        // of 3 kHz, handed with timeScale 1.2. Loop period 1.2 s and pitch
+        // unchanged follow only if the core reads the loop at [0.3 s, 1.5 s)
+        // of the buffer: unscaled it would wrap at [0.25 s, 1.25 s), a period
+        // of 1.0 s.
+        const double kScale = 1.2;
+        std::vector<float> v;
+        for (size_t i = 0; i < at(0.3); ++i) v.push_back(static_cast<float>(0.5 * std::sin(2.0 * kPi * 2000.0 * i / kRate)));
+        const std::vector<float> loop = swellLoop(kRate, 1.2);
+        v.insert(v.end(), loop.begin(), loop.end());
+        for (size_t i = 0; i < at(0.6); ++i) v.push_back(static_cast<float>(0.5 * std::sin(2.0 * kPi * 3000.0 * i / kRate)));
+        const auto stretched = Sample::mono(kRate, v, 1, kScale);
+        check("Sample::timeScale() is what the host handed (1.2), and 1 by default",
+              stretched && stretched->timeScale() == kScale && Sample::mono(kRate, v)->timeScale() == 1.0);
+        check("a time scale that is not finite and positive is refused (nullptr)",
+              !Sample::mono(kRate, v, 1, 0.0) && !Sample::mono(kRate, v, 1, -1.0) &&
+                  !Sample::mono(kRate, v, 1, std::nan("")) && !Sample::mono(kRate, v, 1, HUGE_VAL));
+        const int64_t ls = static_cast<int64_t>(at(0.25)), le = static_cast<int64_t>(at(1.25));
+        const int64_t srcEnd = static_cast<int64_t>(at(1.75));
+
+        // tempo-loop by stretch at 100 BPM.
+        {
+            Instrument inst;
+            inst.prepare(kRate);
+            Program prog;
+            Zone z = fullZone(PlayMode::TempoLoop, 60);
+            z.tempoMethod = TempoMethod::Stretch;
+            z.layers[0].beats = 2.0;
+            z.layers[0].loopStart = ls;
+            z.layers[0].loopEnd = le;
+            z.layers[0].end = srcEnd;
+            addZone(prog, z);
+            install(inst, prog);
+            inst.setSample(prog.zones[0].layers[0].id, stretched);
+            inst.setTempo(100.0);
+            const Stereo a = render(inst, {on(0, 60)}, at(8.0));
+            const double period = autocorrPeriod(a.l, at(1.0), at(7.9), static_cast<int>(at(0.95)), static_cast<int>(at(1.25)));
+            const double periodMs = period / kRate * 1000.0;
+            const double fLoop = zeroCrossingF0(a.l, at(1.0), at(7.9), kRate);
+            const double fLead = zeroCrossingF0(a.l, at(0.02), at(0.28), kRate);
+            const double fBefore = zeroCrossingF0(a.l, at(0.20), at(0.29), kRate);
+            const double fAfter = zeroCrossingF0(a.l, at(0.31), at(0.45), kRate);
+            char buf[320];
+            std::snprintf(buf, sizeof buf,
+                          "tempo-loop stretch, scale 1.2, 100 BPM: period %.3f ms (expected 1200), loop carrier %.4f Hz "
+                          "(%+.5f cent), lead-in %.4f Hz; 0.20-0.29 s %.2f Hz, 0.31-0.45 s %.2f Hz",
+                          periodMs, fLoop, 1200.0 * std::log2(fLoop / 1000.0), fLead, fBefore, fAfter);
+            note(buf);
+            check("the loop wraps at the scaled loop points: period 1200 ms +- 1 ms", std::fabs(periodMs - 1200.0) <= 1.0);
+            check("the pitch is the buffer's own (1000 Hz +- 1 cent)", std::fabs(1200.0 * std::log2(fLoop / 1000.0)) <= 1.0);
+            check("the lead-in lasts the scaled 0.3 s at its own 2 kHz (+- 1 %), the loop's 1 kHz after",
+                  std::fabs(fBefore / 2000.0 - 1.0) < 0.01 && std::fabs(fAfter / 1000.0 - 1.0) < 0.01 &&
+                      std::fabs(1200.0 * std::log2(fLead / 2000.0)) <= 1.0);
+        }
+        // tempo-oneshot by stretch: [start, end) scaled. Source [0.1 s, 1.5 s)
+        // is [0.12 s, 1.8 s) of the buffer: it sounds for 1680 ms (unscaled
+        // start: 1700 ms; unscaled end: 1380 ms).
+        {
+            Instrument one;
+            one.prepare(kRate);
+            Program prog;
+            Zone z = fullZone(PlayMode::TempoOneShot, 60);
+            z.tempoMethod = TempoMethod::Stretch;
+            z.layers[0].beats = 2.0;
+            z.layers[0].loopStart = ls;
+            z.layers[0].loopEnd = le;
+            z.layers[0].start = static_cast<int64_t>(at(0.1));
+            z.layers[0].end = static_cast<int64_t>(at(1.5));   // 1.8 s scaled, inside the tail
+            addZone(prog, z);
+            install(one, prog);
+            one.setSample(prog.zones[0].layers[0].id, stretched);
+            one.setTempo(100.0);
+            const Stereo o = render(one, {on(0, 60)}, at(3.0));
+            const double endMs = static_cast<double>(lastAbove(o.l, 1e-4)) / kRate * 1000.0;
+            const double fTail = zeroCrossingF0(o.l, at(1.40), at(1.65), kRate);
+            char buf[200];
+            std::snprintf(buf, sizeof buf, "tempo-oneshot stretch, scale 1.2, source [0.1 s, 1.5 s): last sound at %.3f ms "
+                          "(expected 1680), tail %.3f Hz", endMs, fTail);
+            note(buf);
+            check("tempo-oneshot by stretch plays the scaled [start, end): 1680 ms +- 1 ms, the tail at 3 kHz +- 1 cent",
+                  std::fabs(endMs - 1680.0) <= 1.0 && std::fabs(1200.0 * std::log2(fTail / 3000.0)) <= 1.0);
+        }
+        // The velToStart skip, scaled: a ramp, velToStart 12700 frames
+        // (100 per velocity step), velocity 64 skips 6300 source frames,
+        // 7560 frames of the buffer.
+        {
+            std::vector<float> ramp(48000);
+            for (size_t i = 0; i < ramp.size(); ++i) ramp[i] = static_cast<float>(i) / 48000.0f;
+            double startAt[2];
+            for (int k = 0; k < 2; ++k) {
+                Instrument inst;
+                inst.prepare(kRate);
+                Program prog;
+                Zone z = fullZone(PlayMode::TempoOneShot, 60);
+                z.tempoMethod = k == 0 ? TempoMethod::Stretch : TempoMethod::Resample;
+                z.velToLevel = 0.0;
+                z.velToStart = 12700.0;
+                z.layers[0].pan = -1.0;
+                z.layers[0].beats = 0.0;   // resample at its own rate: only the scale differs
+                addZone(prog, z);
+                install(inst, prog);
+                inst.setSample(prog.zones[0].layers[0].id, Sample::mono(kRate, ramp, 1, kScale));
+                inst.setTempo(100.0);
+                const Stereo a = render(inst, {on(0, 60, 64)}, 400);
+                startAt[k] = a.l[100] * 48000.0 - 100.0;
+            }
+            note("velocity 64, velToStart 12700, scale 1.2: start frame by stretch " + std::to_string(startAt[0]) +
+                 " (expected 7560), by resample " + std::to_string(startAt[1]) + " (expected 6300: the scale is ignored)");
+            check("the velToStart skip is scaled for stretch (7560 +- 1 frame) and not for resample (6300 +- 1)",
+                  std::fabs(startAt[0] - 7560.0) <= 1.0 && std::fabs(startAt[1] - 6300.0) <= 1.0);
+        }
+        // Every other zone ignores the scale: a loop zone over a sample of
+        // scale 1.2 renders the bytes of the same buffer at scale 1.
+        {
+            auto renderLoop = [&](double scale) {
+                Instrument inst;
+                inst.prepare(kRate);
+                Program prog;
+                Zone z = fullZone(PlayMode::Loop, 60);
+                z.layers[0].loopStart = ls;
+                z.layers[0].loopEnd = le;
+                addZone(prog, z);
+                install(inst, prog);
+                inst.setSample(prog.zones[0].layers[0].id, Sample::mono(kRate, v, 1, scale));
+                return render(inst, {on(0, 60)}, at(3.0));
+            };
+            const Stereo a = renderLoop(kScale), b = renderLoop(1.0);
+            check("a loop zone ignores the scale (bytes of scale 1.2 == scale 1, cmp)",
+                  std::memcmp(a.l.data(), b.l.data(), a.l.size() * sizeof(float)) == 0 &&
+                      std::memcmp(a.r.data(), b.r.data(), a.r.size() * sizeof(float)) == 0 && rms(a.l, 0, at(3.0)) > 0.1);
+        }
     }
 
     // ------------------------------------------------- tempo modes and keys ---

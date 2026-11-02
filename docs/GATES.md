@@ -568,6 +568,19 @@ tempo modes (it is not a transposition). Accepted as built: a sounding
 `setTempo()` per block. Watched failing: beats over `[start, end)` (5
 checks), tempo modes tracking the key (3), the lead-in at the sample's own
 rate (2).
+**Extended 2026-11-02** (DESIGN §13, settled 2026-11-02, for qbx Q4): a
+host-supplied `Sample` carries `timeScale()` (stretched ÷ source length,
+default 1; a non-finite or non-positive one is refused), and a `stretch` zone
+in a tempo mode scales `start`, `end`, `loopStart`, `loopEnd` and the
+`velToStart` skip by it at note-on. `tempo_tests` 39/39. A buffer rendered
+1.2× (0.3 s lead-in, 1.2 s loop, 0.6 s tail) handed at scale 1.2, positions in
+source frames, 100 BPM: loop period 1200.000 ms, carrier 1000.0000 Hz
+(−0.00000 cent), lead-in 0.3 s at 2000.0000 Hz; `tempo-oneshot` over source
+[0.1 s, 1.5 s) sounds for 1680.000 ms; velocity 64 with velToStart 12700 starts
+at frame 7559.999 by stretch and 6300.000 by resample; a `loop` zone renders
+scale 1.2 and scale 1 byte-identically. Watched failing: positions unscaled (3
+checks), loop points only (2), start only (1), end only (1), skip unscaled (1),
+the scale applied to every zone (2).
 
 * **C7.1** A 2-beat loop at 120 BPM played at 100 BPM measures a period of
   2·60/100 s ± 1 ms, and its pitch falls by 12·log2(120/100) semitones
