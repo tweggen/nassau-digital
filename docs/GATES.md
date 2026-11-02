@@ -785,6 +785,22 @@ DESIGN §6, §6.2.
 * **Q3.4** Renaming the asset leaves the link intact, across a save and a
   reload.
 
+**DONE 2026-11-02** (qbx#336, QBX-266). Q3.1 (`sampler_q3_asset_link.qxa`): an
+edit inside the linked arrangement is heard by the next render, rms
+0.5 → 0.25 → 0.5 in two-sided bands, both after the 150 ms bounce debounce and
+through an immediate render whose settle logs the run-barrier line. Q3.2: three
+actions that do not touch the asset leave the `renders` counter and the
+generation unchanged, after the debounce and after a settle. Q3.3
+(`sampler_q3_link_cycle.qxa`): refused for an asset over the master root, for
+an arrangement holding the sampler's own track, and through a second sampler's
+link; positive controls pass. Q3.4: the rename (new verb `rename-asset`)
+starts no bounce, and after save and reload the link names the renamed asset
+and an edit is still heard. A bounce superseded by a newer edit is never
+installed. qbx suite 551/551; 14 sabotages, each watched failing. Not gated: a
+cycle closed after the link exists (the author ruled 2026-11-01 that such an
+edit is refused with the same check: QBX-267), a bounce during playback.
+Corrections: qbx proposal 56 §11 "Q3".
+
 ### Q4 — Tempo modes by stretching
 
 DESIGN §5 (method `stretch`).
