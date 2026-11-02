@@ -429,6 +429,20 @@ not change, because every sampler meets them:
   (the round-robin choice hashes the zone id, so renumbering would change what
   it plays); a base that carries one anyway has the colliding add refused and
   reported.
+* **Hiding a layer** **(the author, 2026-11-01, on #24)**: `hide-layer`, the
+  same mechanics as hiding a zone: one layer of a base zone is left out of
+  what plays (its zone stays), undo puts it back where it was, flatten drops
+  it, and a base without the layer or its zone orphans it.
+* **Rebase** **(the author, 2026-11-01, on #24)**: after a drift or version
+  report the user can accept the new base. The overlay's `baseVersion` becomes
+  the new base's `libraryVersion` and every edit that drifted gets as its
+  previous value what the new base has under it (earlier edits applied, in
+  order), so both reports clear; what plays does not change. Orphans stay
+  orphans, and an edit that applied without drift is left as written. A
+  rebase is undoable like an edit (refused once the overlay has changed
+  since).
+* **Flatten keeps the overlay's ids** **(the author, 2026-11-01, on #24:
+  accepted as built)**.
 
 This is what Kontakt, Logic's Sampler and SFZ do implicitly (edits live in the
 instance; the library is untouched; "save as" writes a new file that refers to
@@ -582,7 +596,7 @@ layer, since ALL is expanded when the edit is made:
 The verbs of 2026-11-01 (§8) are `set-program` (no address, `attr`/`attr.was`
 pairs), `add-zone` and `add-layer` (every attribute written, as in a program
 file; a zone the overlay adds is one `add-zone` followed by one `add-layer`
-per layer) and `hide-zone`; the overlay's own `nextId` is a root attribute,
+per layer), `hide-zone` and `hide-layer` (`<hide-layer layer="ID"/>`); the overlay's own `nextId` is a root attribute,
 written once it has added something:
 
 ```xml
@@ -699,5 +713,11 @@ GATES.md records as built):
 * **C8 orphans**: as built (reported per edit; flatten proceeds and drops them).
 * **C8 `set-program`**: program-level attributes are edited in an overlay by a
   `set-program` verb with `attr`/`attr.was` pairs, like `set-zone`.
+
+* **C8, the author's answers on #24**: flatten keeps the overlay's ids
+  (accepted as built); add `hide-layer` (as `hide-zone`, for one layer); add a
+  **rebase** that accepts a new base after the drift report, re-stamps
+  `baseVersion`, refreshes the stored `.was` so the reports clear, is
+  undoable, and leaves orphans orphaned.
 
 The C8 items above are built (§8, §12; GATES.md C8, 2026-11-01).

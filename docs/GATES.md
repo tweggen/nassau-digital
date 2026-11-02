@@ -646,8 +646,34 @@ keeping it (1), reader letting `nextId` into the range (1) or raising it past
 overlay ids (3), overlay `nextId` not written (1), add-layer to a missing
 zone refused instead of orphaned (2), an add-zone below the range accepted
 (1).
-Not built: hiding a LAYER (only zones, as decided), and re-basing an overlay
-onto a newer version (re-stamping `baseVersion`); see the PR.
+Not built then: hiding a layer and re-basing; both followed the author's
+answers on #24 (below).
+
+**The author's answers on #24 built, 2026-11-01** (DESIGN §8, §13).
+`Tests/overlay_tests` 121/121 (21 new). Flatten keeping the overlay's ids is
+accepted as built. *hide-layer*: `<hide-layer layer="6"/>` leaves zone 5
+without layer 6 while the base keeps it; cmp with the layer removed by hand
+(RMS from key 36's note-on to key 38's 0.2503 → 0); flatten drops it; an
+edit of the hidden layer is refused; orphaned (naming the layer) on a base
+without the layer or without its zone (18 on v4); `all`, a list, another
+attribute or no layer refused; undo puts it back in its place (first of two
+layers). *Rebase*: an overlay made on version 3 (#0 attack, #1 layer tune,
+#2 set-program outputLevel, #3 zone 9, #4 attack again, #5 an unknown verb,
+#6 a hand-written attack over #4 with a stale `.was`, #7 a `.was` spelled
+"0.0") on version 4 (zone 17 attack 0.05, outputLevel −3, zone 9 dropped)
+reports 3 → 4, #0 / #2 / #6 drifted, #3 orphaned; `rebaseOverlay` stamps 4 and
+rewrites exactly #0 / #2 / #6 (`attack.was="0.05"`, `outputLevel.was="-3"`,
+and the chained #6 `attack.was="0.5"`, the value under it with #4 applied),
+leaves #1 / #3 / #4 / #5 / #7 byte for byte; afterwards no mismatch, no
+drift, #3 still orphaned, and what plays is unchanged (structural and cmp);
+the rebased overlay round-trips byte-stable; a second rebase changes
+nothing; `undoRebase` restores the overlay's bytes and what played before,
+and is refused after a further edit. Watched failing (9 sabotages):
+hide-layer not applied (10), its undo not reinserting (2), rebase not
+re-stamping (2), not refreshing (4), refreshing against the bare new base
+instead of the running program (3), refreshing edits that did not drift (1),
+`undoRebase` ignoring later edits (1) or leaving `current` (1), rebase
+leaving `current` on the old base (1).
 
 * **C8.1** Base v3 + an overlay that edits zone 17: what plays equals a
   program with the edit made directly (`cmp`).
