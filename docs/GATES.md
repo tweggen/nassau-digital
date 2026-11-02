@@ -824,6 +824,23 @@ DESIGN §5 (method `stretch`).
   the source's onset analysis; renders after each are byte-identical across two
   runs.
 
+**DONE 2026-11-02** (qbx#339, QBX-268; core part nassau-digital#27, pinned at
+a82a698). Q4.1 (`sampler_q4_stretch.qxa`): a 2-beat loop at 120 BPM played at
+100 BPM by stretch measures a period of 1200.0000 ms (57600.0000 frames), with
+pitch 999.772 Hz (−0.39 cent) and 1000.39 Hz (+0.67 cent) in two windows. The
+unstretched control at 120 BPM measures 1000.0000 ms and 999.974 Hz. Loop
+points set in source frames measure 900.0000 ms, which holds only because the
+core scales the positions. Q4.2 (`sampler_q4_generations.qxa`), from an empty
+onset store with the analysis held: the tempo change makes generation 3,
+stretched without onsets; completion of the analysis (4 onsets) makes
+generation 4. The render after each equals, byte for byte, a reference render
+from an earlier run; 3 runs. A render issued straight after `set-tempo` waits
+at the run barrier (`waited 1536 ms`). 10 qbx and 6 core sabotages, each
+watched failing; qbx suite 559/559. Not gated: a stretch during playback, an
+analysis racing a render, the loop seam (stretched with the whole buffer, not
+circularly), tune and LFO drift in tempo modes (accepted, DESIGN §13), and
+renders on macOS and Windows. Corrections: qbx proposal 56 §11 "Q4".
+
 ### Q5 — Live play
 
 DESIGN §9.4.
