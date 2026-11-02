@@ -354,7 +354,9 @@ Fixed-size views, one model:
 
 **Choosing the view** **(decided)**. A new instance starts in the view a
 per-user setting names (Key by default). Switching an instance to Pad is saved
-with that instance in the project, and it changes where recordings land.
+with that instance in the project, and it changes where recordings land. The view, the selected pad and the record input are the host's instance
+state, saved beside the program and never in it; the last key played is live
+and not saved (§13, settled 2026-11-02).
 
 **Recording** **(decided)** goes through qbx's recording, so input monitoring
 and latency compensation are qbx's. A new verb, `place-sampler-recording`,
@@ -741,3 +743,21 @@ in §5 and built with it):
   not taken.)
 * tune, master tune and LFO pitch still apply to the read rate in tempo
   modes, accepted as is for now (a zone with tune ≠ 0 drifts off tempo).
+
+**Settled on 2026-11-02** (the author, answering qbx QBX-272's questions on
+§7; applied in §7 and built with qbx's Q6):
+
+* **The view, the selected pad and its bank are instance state of the host,
+  not of the program.** In Smaragd they are model state of the instance's
+  program object, saved in qbx's own element beside the program and **never**
+  in the program text, so an exported program never carries them.
+* **They are set by a verb from Q6 on**, not only by the editor:
+  `set-sampler-view` (`view`, `padBank`, `pad`) is a real, undoable verb,
+  brought forward from Q7; the editor (Q7) drives the same verb.
+* **The last key played** is the last note seen by the instance's **device
+  MIDI input tap**, the same tap Q7.2's hand selection uses, not the engine's
+  event feed. It is live state and is **not saved**; a headless case sets it by
+  injecting MIDI into that input.
+* **The record input** (Q-1's `audio:<device>:<mask>`) sits beside the view
+  state on the host's instance object, **not** in the program. A headless case
+  feeds it through qbx's existing file input device.
