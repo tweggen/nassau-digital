@@ -367,9 +367,11 @@ take is not a fixed buffer until then. Where it lands:
 * **Pad view**: on the selected pad's key, as that pad's zone (replacing
   layer 1 if the zone exists).
 * **Key view**, empty program: a zone across the whole keyboard, played
-  chromatically around its root key.
+  chromatically around its root key, 60 (§13, 2026-11-03).
 * **Key view**, program with zones: a new one-key zone on the **last key
   played**, so a recording never lands on top of an existing drum map.
+* The Map and Zone views land a take as the Key view does; the pad's zone is
+  the first one-key zone on the pad's key (§13, 2026-11-03).
 
 A **threshold start** (recording begins at the first sound) is new work in
 qbx's recorder, not something that exists.
@@ -761,3 +763,17 @@ in §5 and built with it):
 * **The record input** (Q-1's `audio:<device>:<mask>`) sits beside the view
   state on the host's instance object, **not** in the program. A headless case
   feeds it through qbx's existing file input device.
+
+**Settled on 2026-11-03** (the author, accepting the readings qbx QBX-272
+built for points §7 does not state; applied in §7):
+
+* **Map and Zone views land a take as the Key view does.**
+* **The pad's zone** is the first one-key zone on the pad's key; a new take
+  replaces its layer 1.
+* **The whole-keyboard zone** (Key view, empty program) is rooted on key 60.
+* **A Key-view take onto a key that already has a one-key zone** adds a second
+  zone there rather than replacing it.
+
+Still open, not yet asked: what a zone's `pad` attribute means, and how a pad
+reassigned to another key is stored.
+
