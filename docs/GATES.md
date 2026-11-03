@@ -863,6 +863,24 @@ DESIGN §7.
   empty program → a zone over the whole keyboard; Key view on a program with
   zones → a one-key zone on the last key played. One case each.
 
+**DONE 2026-11-03** (qbx#341, QBX-272). Q6.1 (`sampler_q6_record.qxa`):
+record-start, stop, and the take lands as a whole-keyboard zone; the next note
+plays it at 0.999967 / 0.999945 of the recording's own RMS (band ±2 %;
+absolute 0.49997 / 0.24998). One undo brings back the program as it was,
+removes the registered asset and renders silence; redo renders the same bytes.
+Q6.2, one case each: Pad view, bank 1 pad 5, lands a one-key zone on key 57,
+and a second take replaces that zone's layer 1 (`sampler_q6_land_pad.qxa`);
+Key view on an empty program lands a zone over 0–127 rooted on 60, measured
+480 / 960 / 240 Hz at the root and an octave either side
+(`sampler_q6_land_key_empty.qxa`); Key view on a program with zones lands on
+the last of two injected keys (67, not 64), the existing zone untouched, and a
+take before any key is refused (`sampler_q6_land_key_zones.qxa`). 14
+sabotages, each watched failing; qbx suite 567/567. Not gated or not built:
+cycle and punch regions for a take into the instrument, monitoring the
+record input, pad reassignment (§13 pads, 2026-11-03: qbx QBX-277 moves the
+Pad view onto the `<Pads>` table and the covering-zone landing rule).
+Corrections: qbx proposal 56 §11 "Q6".
+
 ### Q7 — Editor
 
 DESIGN §7, §9.3. Qt, following Smaragd's look.
