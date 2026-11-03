@@ -875,6 +875,26 @@ DESIGN §9.4.
   nassau-analogue's on the same device and buffer size, is within one device
   block of it. Recorded here with both numbers.
 
+**Q5.1 DONE 2026-11-03** (qbx#342, QBX-271), with no product code change: the
+sampler takes the live path every instrument takes. "The live lane's
+block-plus-lead bound" is 4 ring + 2 lead + 1 device block = 7168 frames at
+the headless 1024-frame block (the author, 2026-11-03; the literal one block
+plus lead, 3072, is met by no instrument, the test sine included at
+4025–5008). `sampler_q5_live_play` (transport stopped): onset 4646–4936
+frames over 25 runs; the test sine armed on the same input and panned to the
+other channel starts exactly 1 frame later (bound |diff| ≤ 64, so a sampler
+one block late fails). `sampler_q5_live_playing` (transport running, where
+the ownership half means something): 2324–2774 frames, `liveOwnedRefusals`
+and `liveThreadRefusals` 0 in every run, also with a generation installed
+while live-owned. `sampler_q5_live_generation`: a swap under a sounding voice
+leaves it unchanged and the next note plays the new sample. Six of seven
+sabotages bite; removing `retireClosureNodes` bites nothing. Not gated: any
+device block but 1024, a tempo-mode zone live, high polyphony, a bounce over
+an armed track (qbx QBX-274).
+
+**Q5.2 OPEN**: the author's hand check. Procedure in qbx#342 and qbx proposal
+56 §11 "Q5 as built" item 6.
+
 ### Q6 — Recording into the instrument
 
 DESIGN §7.
