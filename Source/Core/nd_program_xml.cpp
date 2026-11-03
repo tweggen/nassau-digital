@@ -8,6 +8,54 @@ namespace {
 
 constexpr const char* kZoneElement = "zone";
 constexpr const char* kLayerElement = "layer";
+constexpr const char* kPadsElement = "Pads";
+constexpr const char* kPadElement = "Pad";
+
+// One integer attribute of a <Pad> row, in [0, 127].
+bool padNumber(const XmlNode& n, const char* attr, int& out, std::string& error) {
+    const std::string* v = n.attribute(attr);
+    long long i = 0;
+    if (!v) {
+        error = "<Pad> needs " + std::string(attr) + "=";
+        return false;
+    }
+    if (!parseInteger(*v, i)) {
+        error = "<Pad>: " + std::string(attr) + ": expected an integer, got \"" + *v + "\"";
+        return false;
+    }
+    if (i < 0 || i > 127) {
+        error = "<Pad>: " + std::string(attr) + ": " + *v + " is out of range [0, 127]";
+        return false;
+    }
+    out = static_cast<int>(i);
+    return true;
+}
+
+// Reads the <Pads> table (DESIGN §13, settled 2026-11-03, pads). Refused: a
+// row without n or key, a value that is not an integer in 0..127, the same n
+// twice. Unknown attributes and children are kept, of the table and of each
+// row.
+bool readPads(const XmlNode& pn, Program& prog, std::string& error) {
+    for (const auto& a : pn.attributes) prog.padsExtras.attributes.push_back(a);
+    std::set<int> seen;
+    for (const XmlNode& rn : pn.children) {
+        if (rn.name != kPadElement) {
+            prog.padsExtras.children.push_back(rn);
+            continue;
+        }
+        PadRow row;
+        if (!padNumber(rn, "n", row.n, error) || !padNumber(rn, "key", row.key, error)) return false;
+        if (!seen.insert(row.n).second) {
+            error = "<Pads>: pad " + std::to_string(row.n) + " has more than one row";
+            return false;
+        }
+        for (const auto& a : rn.attributes)
+            if (a.first != "n" && a.first != "key") row.extras.attributes.push_back(a);
+        row.extras.children = rn.children;
+        prog.pads.push_back(std::move(row));
+    }
+    return true;
+}
 
 bool parseId(const XmlNode& n, uint32_t& id, std::string& error) {
     const std::string* v = n.attribute("id");
@@ -83,7 +131,17 @@ ProgramParseResult programFromXml(const XmlNode& root) {
         return true;
     };
 
+    bool sawPads = false;
     for (const XmlNode& zn : root.children) {
+        if (zn.name == kPadsElement) {
+            if (sawPads) {
+                r.error = "more than one <Pads> table";
+                return r;
+            }
+            sawPads = true;
+            if (!readPads(zn, prog, r.error)) return r;
+            continue;
+        }
         if (zn.name != kZoneElement) {
             prog.extras.children.push_back(zn);
             continue;
@@ -170,6 +228,25 @@ XmlNode programToXml(const Program& prog) {
         }
         for (const auto& c : z.extras.children) zn.children.push_back(c);
         root.children.push_back(std::move(zn));
+    }
+    // The pads table, after the zones, and only when there is something in
+    // it: a program whose pads are all on their default keys writes no
+    // <Pads>, so every program written before 2026-11-03 stays as it was.
+    if (!prog.pads.empty() || !prog.padsExtras.attributes.empty() || !prog.padsExtras.children.empty()) {
+        XmlNode pn;
+        pn.name = kPadsElement;
+        pn.attributes = prog.padsExtras.attributes;
+        for (const PadRow& row : prog.pads) {
+            XmlNode rn;
+            rn.name = kPadElement;
+            rn.attributes.emplace_back("n", std::to_string(row.n));
+            rn.attributes.emplace_back("key", std::to_string(row.key));
+            for (const auto& a : row.extras.attributes) rn.attributes.push_back(a);
+            rn.children = row.extras.children;
+            pn.children.push_back(std::move(rn));
+        }
+        for (const auto& c : prog.padsExtras.children) pn.children.push_back(c);
+        root.children.push_back(std::move(pn));
     }
     for (const auto& c : prog.extras.children) root.children.push_back(c);
     return root;

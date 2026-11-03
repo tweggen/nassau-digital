@@ -589,8 +589,15 @@ kept on load and written back. Proposal:
     <layer id="2" src="audio/kick.wav" velLo="0" velHi="127" velFade="0"
            rrGroup="0" tune="0"/>
   </zone>
+  <Pads>
+    <Pad n="1" key="36"/>
+  </Pads>
 </NassauDigitalProgram>
 ```
+
+`<Pads>` (§13, settled 2026-11-03, pads; built 2026-11-03) follows the zones
+and is written only when a pad is off its default key; here pad 1 (bank 1,
+pad 2) also plays the kick.
 
 An overlay (§8) is a list of the same verbs, applied to the base in order.
 Each changed parameter is written with the value it replaces, as one paired
