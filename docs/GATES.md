@@ -889,6 +889,26 @@ DESIGN §3.1.
 * **Q8.3** Unrouting aux 1 sends the kick back to main, and the change is a
   state change: the next render hears it from the first frame.
 
+**DONE 2026-11-03** (qbx#340, QBX-273). The sampler reports nine stereo buses
+(Main, Aux 1..8) and hands the core the routed mask; a bus routed in the
+processor's pre-roll renders into the instrument's own scratch, so a note-on
+there keeps its route. Q8.1 (`sampler_q8_outputs.qxa`): the return soloed
+equals `goldens/sampler_q8_kick.wav` byte for byte, and with the return muted
+the Drums main equals `goldens/sampler_q8_hat.wav`, RMS 0 over [0, 24000)
+where only the kick plays. Q8.2 (`sampler_q8_duck.qxa`): inside the kick the
+keyed bass measures 0.124997 / 0.062499 against a dry 0.499987 / 0.24999
+(out/dry 0.25000, band ±1 %), the Drums track left unmuted; unrouted the bass
+is dry again, after undo ducked again. Q8.3: the render right after
+`clear-return-source` equals `goldens/sampler_q8_mixed.wav` from frame 0,
+again after removing the return; the track's content epoch advances across
+each unroute. 7 sabotages, each watched failing; qbx suite 562/562. Found and
+fixed on the way: after `clear-return-source` a slot keyed from the former
+return kept ducking from cached pages (proposal 55, any plugin). Not gated:
+per-output `busDrive<k>` / `outputLevel<k>` heard through qbx (C6.3 covers
+the core), the live path, several aux buses routed at once. `set-sampler-
+routing` is struck (the author, 2026-11-03): the return tracks are the only
+writer of the mask. Corrections: qbx proposal 56 §11 "Q8".
+
 ---
 
 ## Later
