@@ -37,6 +37,12 @@
   </zone>
   <zone id="4" mode="loop" filter="lp24"/>
   <zone id="12" mode="gated"/>
+  <Pads futurePadsAttr="t">
+    <Pad n="1" key="38" futurePadAttr="p"/>
+    <Pad n="0" key="40"/>
+    <Pad n="93" key="0"><futurePadChild/></Pad>
+    <futurePadsChild/>
+  </Pads>
   <futureProgramChild kind="x">
     <nested deep="yes">text &amp; more<![CDATA[<raw>]]></nested>
   </futureProgramChild>

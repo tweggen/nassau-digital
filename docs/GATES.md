@@ -141,6 +141,28 @@ tune +2 on ALL gives −95/0/95.5 → −93/2/96 (clamped); relative edits on 6
 enum/bool parameters refused, all-or-nothing. C1.5: 7/7 kinds of edit restored
 exactly from what they returned. Each AC watched failing under a sabotage.
 
+*The `<Pads>` table, 2026-11-03 (DESIGN §13, "Settled on 2026-11-03, pads";
+qbx QBX-277):* the program grew a program-level table, one `<Pad n key>` row
+per pad off its default key (36 + n), written after the zones and only when
+it has a row. `Tests/pads_tests` 56/56: parse, write and round-trip (rows keep
+file order, unknown attributes and children kept on the table and on a row,
+no table written for a program without rows); refusals of n outside 0..95 (six banks, the author's answer of
+2026-11-03) or key outside 0..127, a duplicate n, a row without n or key and a second table, each naming
+it; a pad's key (row, else 36 + n, else none for n ≥ 92); `setPadKey` (only
+the key changes, the default key removes the row, new rows in order of n,
+refusals change nothing, the prior key undoes); `padsOnKey` and
+`padSelectedByKey` (a shared key keeps the selected pad, else the
+lowest-numbered); `zonesCoveringKey` (three pads on one tom zone; two
+velocity zones on one key); the zone attribute `pad` read and written with
+no meaning; the table kept through an overlay and a flatten. The C1.1
+fixture carries a table (`program_tests` 119/119). Ten sabotages, each
+biting (writer drops the table; duplicate n accepted; key range unchecked;
+the reader and setPadKey taking n up to 127; default key keeps its row;
+shared key always the lowest; padKey ignores the rows; equality ignores the
+table; coverage by keyLo only). Widening padKey's own n bound to 127 bites
+nothing and cannot: every default past n 91 is beyond key 127 anyway, and
+no row can carry an n above 95.
+
 * **C1.1** Parse → write → parse yields the identical structure, for a
   fixture covering every element and attribute.
 * **C1.2** Unknown attributes and elements survive the round trip.

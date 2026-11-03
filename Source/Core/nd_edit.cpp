@@ -273,4 +273,34 @@ bool reinsertLayer(Program& prog, const RemovedLayer& removed) {
     return true;
 }
 
+// ---- Pads ---------------------------------------------------------------------------
+
+PadEditResult setPadKey(Program& prog, int n, int key) {
+    PadEditResult r;
+    if (n < 0 || n >= kNumPads) {
+        r.error = "pad " + std::to_string(n) + " is not a pad (0.." + std::to_string(kNumPads - 1) + ")";
+        return r;
+    }
+    const int def = defaultPadKey(n);
+    if (key < -1 || key > 127 || (key == -1 && def != -1)) {
+        r.error = "key " + std::to_string(key) + " is not a MIDI key (0..127)";
+        return r;
+    }
+    r.priorKey = prog.padKey(n);
+    auto it = std::find_if(prog.pads.begin(), prog.pads.end(), [n](const PadRow& row) { return row.n == n; });
+    if (key == def) {
+        if (it != prog.pads.end()) prog.pads.erase(it);
+    } else if (it != prog.pads.end()) {
+        it->key = key;
+    } else {
+        auto at = std::find_if(prog.pads.begin(), prog.pads.end(), [n](const PadRow& row) { return row.n > n; });
+        PadRow row;
+        row.n = n;
+        row.key = key;
+        prog.pads.insert(at, std::move(row));
+    }
+    r.ok = true;
+    return r;
+}
+
 }  // namespace nd

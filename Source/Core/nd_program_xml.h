@@ -7,6 +7,9 @@
 //     <zone id="1" keyLo="36" keyHi="36" ... mode="oneshot" output="aux1" ...>
 //       <layer id="2" src="audio/kick.wav" velLo="0" velHi="127" .../>
 //     </zone>
+//     <Pads>
+//       <Pad n="5" key="40"/>
+//     </Pads>
 //   </NassauDigitalProgram>
 //
 // Every known attribute is written, in table order (nd_program.h), followed
@@ -15,7 +18,11 @@
 //
 // Refused on load, with a message: a malformed value, a value out of range,
 // an unknown enum value, a zone or layer without an id, a duplicate id, a
-// zone with more than four layers, a root element of another name.
+// zone with more than four layers, a root element of another name; in the
+// <Pads> table (DESIGN §13, settled 2026-11-03, pads) a row without n or key,
+// an n outside 0..95 or a key outside 0..127, an n given twice, and a
+// second <Pads>. The table is written after the zones and only when it has a
+// row (or unknown content of its own); rows keep the order they were read in.
 
 #include <string>
 

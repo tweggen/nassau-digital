@@ -25,7 +25,9 @@ bool Zone::operator==(const Zone& o) const {
 }
 
 bool Program::operator==(const Program& o) const {
-    if (name != o.name || nextId != o.nextId || zones != o.zones || !(extras == o.extras)) return false;
+    if (name != o.name || nextId != o.nextId || zones != o.zones || pads != o.pads ||
+        !(padsExtras == o.padsExtras) || !(extras == o.extras))
+        return false;
     for (const auto& p : programParams())
         if (p.kind == ParamKind::String ? p.getText(*this) != p.getText(o) : p.get(*this) != p.get(o)) return false;
     return true;
@@ -49,6 +51,44 @@ std::pair<Zone*, Layer*> Program::findLayer(uint32_t id) {
 std::pair<const Zone*, const Layer*> Program::findLayer(uint32_t id) const {
     auto r = const_cast<Program*>(this)->findLayer(id);
     return {r.first, r.second};
+}
+
+// ---- Pads -----------------------------------------------------------------------
+
+int defaultPadKey(int n) {
+    if (n < 0 || n >= kNumPads) return -1;
+    const int key = kPadDefaultBaseKey + n;
+    return key <= 127 ? key : -1;
+}
+
+int Program::padKey(int n) const {
+    if (n < 0 || n >= kNumPads) return -1;
+    for (const PadRow& r : pads)
+        if (r.n == n) return r.key;
+    return defaultPadKey(n);
+}
+
+std::vector<int> padsOnKey(const Program& prog, int key) {
+    std::vector<int> out;
+    if (key < 0 || key > 127) return out;
+    for (int n = 0; n < kNumPads; ++n)
+        if (prog.padKey(n) == key) out.push_back(n);
+    return out;
+}
+
+int padSelectedByKey(const Program& prog, int key, int currentPad) {
+    const std::vector<int> on = padsOnKey(prog, key);
+    if (on.empty()) return -1;
+    for (int n : on)
+        if (n == currentPad) return currentPad;
+    return on.front();
+}
+
+std::vector<uint32_t> zonesCoveringKey(const Program& prog, int key) {
+    std::vector<uint32_t> out;
+    for (const Zone& z : prog.zones)
+        if (z.keyLo <= key && key <= z.keyHi) out.push_back(z.id);
+    return out;
 }
 
 bool isValidPolyphony(int voices) {

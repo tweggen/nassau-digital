@@ -10,6 +10,8 @@
 //        └─ Layer × 1..4   sample reference, start/end, loop points, beats,
 //                          velocity window and fade, rrGroup, tune, level,
 //                          pan, reverse
+//    └─ Pads          one <Pad n key> row per pad off its default key
+//                     (DESIGN §7, §13 settled 2026-11-03, pads)
 //
 // Every attribute of a zone, a layer and the program is described once, in a
 // parameter table (zoneParams(), layerParams(), programParams()): its XML
@@ -154,6 +156,36 @@ struct Zone {
     bool operator!=(const Zone& o) const { return !(*this == o); }
 };
 
+/// THE PADS (DESIGN §7; §13, settled 2026-11-03, pads). A pad names a KEY,
+/// not a zone: its zone is whatever zone covers that key, so several pads may
+/// play one zone at different keys. Pad n is the pad's index over all banks
+/// counting from 0 (bank b, pad p, both from 1: n = 16·(b−1) + (p−1)); it
+/// defaults to key 36 + n. There are six banks, pads 0..95 (the author,
+/// 2026-11-03, QBX-277); a pad whose default would pass 127 (n 92..95) has
+/// NO key until a row gives it one.
+///
+/// The program's `<Pads>` table holds one row for each pad that is NOT on its
+/// default key, and travels with the program (into a library, into an export).
+/// Reassigning a pad changes only its key; no zone moves. The zone attribute
+/// `pad` is superseded by this table: it is still read and written (R4) but
+/// nothing derives meaning from it.
+constexpr int kNumPads = 96;           ///< six banks of 16: valid n 0..95
+constexpr int kPadsPerBank = 16;
+constexpr int kPadDefaultBaseKey = 36; ///< pad 0's default key, the GM kick
+
+/// Pad n's default key, 36 + n; -1 when that passes 127 or n is not a pad.
+int defaultPadKey(int n);
+
+/// One row of the table: pad n plays `key`. Unknown attributes and child
+/// elements of the row are kept (R4).
+struct PadRow {
+    int n = 0;
+    int key = 0;
+    Extras extras;
+    bool operator==(const PadRow& o) const { return n == o.n && key == o.key && extras == o.extras; }
+    bool operator!=(const PadRow& o) const { return !(*this == o); }
+};
+
 /// Polyphony choices (DESIGN §4.5, decided): 8, 16, ..., 256; default 32.
 constexpr int kPolyphonyChoices[] = {8, 16, 32, 64, 128, 256};
 constexpr int kDefaultPolyphony = 32;
@@ -181,6 +213,12 @@ struct Program {
     /// overlay.
     std::string libraryVersion;
     std::vector<Zone> zones;
+    /// The `<Pads>` table, in the order it is written: a row read from a file
+    /// keeps its place, a row setPadKey() adds goes in order of n. No two rows
+    /// share an n (the reader refuses that, setPadKey() never makes it).
+    std::vector<PadRow> pads;
+    /// Unknown attributes and child elements of the `<Pads>` element itself.
+    Extras padsExtras;
     Extras extras;
 
     bool operator==(const Program& o) const;
@@ -191,7 +229,25 @@ struct Program {
     /// The layer with this id and the zone holding it, or {nullptr, nullptr}.
     std::pair<Zone*, Layer*> findLayer(uint32_t id);
     std::pair<const Zone*, const Layer*> findLayer(uint32_t id) const;
+
+    /// Pad n's key: its row's, else its default; -1 when it has none (n out
+    /// of 0..95, or a default beyond 127 and no row).
+    int padKey(int n) const;
 };
+
+/// The pads that play `key`, lowest n first (every n 0..95, rows and
+/// defaults alike). Empty for a key no pad plays.
+std::vector<int> padsOnKey(const Program& prog, int key);
+
+/// The pad a note on `key` from the device input selects (DESIGN §13,
+/// 2026-11-03): when several pads share the key, `currentPad` stays selected
+/// if it is one of them, otherwise the lowest-numbered one. -1 when no pad
+/// plays the key (the selection does not change then).
+int padSelectedByKey(const Program& prog, int key, int currentPad);
+
+/// The zones covering `key` (keyLo <= key <= keyHi, at any velocity), in
+/// program order: a pad's zone is the one zone covering its key (DESIGN §13).
+std::vector<uint32_t> zonesCoveringKey(const Program& prog, int key);
 
 // ---- The parameter tables ---------------------------------------------------
 
