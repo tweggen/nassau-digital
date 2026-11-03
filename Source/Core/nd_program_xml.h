@@ -20,7 +20,7 @@
 // an unknown enum value, a zone or layer without an id, a duplicate id, a
 // zone with more than four layers, a root element of another name; in the
 // <Pads> table (DESIGN §13, settled 2026-11-03, pads) a row without n or key,
-// an n or key that is not an integer in 0..127, an n given twice, and a
+// an n outside 0..95 or a key outside 0..127, an n given twice, and a
 // second <Pads>. The table is written after the zones and only when it has a
 // row (or unknown content of its own); rows keep the order they were read in.
 

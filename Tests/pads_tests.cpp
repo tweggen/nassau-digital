@@ -3,7 +3,7 @@
 //
 //   P1 parse, write and round-trip the table; a program without one writes
 //      none (every program written before stays byte-identical).
-//   P2 validation: n 0..127, key 0..127, no duplicate n, a single table; each
+//   P2 validation: n 0..95 (six banks), key 0..127, no duplicate n, a single table; each
 //      refused with a reason that names it.
 //   P3 a pad's key: its row, else 36 + n, else none (n >= 92).
 //   P4 setPadKey: only the key changes, a default key removes the row, rows
@@ -99,10 +99,13 @@ int main() {
     group("P2 validation, refused with a reason");
     {
         std::string why;
-        check("n = 128 is refused", refused(withPads("<Pad n=\"128\" key=\"40\"/>"), "n: 128 is out of range", &why));
+        check("n = 96 is refused (six banks: 0..95)",
+              refused(withPads("<Pad n=\"96\" key=\"40\"/>"), "n: 96 is out of range [0, 95]", &why));
+        note(why);
+        check("n = 127 is refused", refused(withPads("<Pad n=\"127\" key=\"40\"/>"), "n: 127 is out of range"));
         note(why);
         check("n = -1 is refused", refused(withPads("<Pad n=\"-1\" key=\"40\"/>"), "n: -1 is out of range"));
-        check("key = 128 is refused", refused(withPads("<Pad n=\"3\" key=\"128\"/>"), "key: 128 is out of range", &why));
+        check("key = 128 is refused", refused(withPads("<Pad n=\"3\" key=\"128\"/>"), "key: 128 is out of range [0, 127]", &why));
         note(why);
         check("key = -1 is refused", refused(withPads("<Pad n=\"3\" key=\"-1\"/>"), "key: -1 is out of range"));
         check("a duplicate n is refused",
@@ -115,8 +118,8 @@ int main() {
         check("a second <Pads> is refused",
               refused("<NassauDigitalProgram version=\"1\"><Pads/><Pads/></NassauDigitalProgram>",
                       "more than one <Pads>"));
-        check("n 0 and 127, key 0 and 127 are accepted",
-              parseProgram(withPads("<Pad n=\"0\" key=\"127\"/><Pad n=\"127\" key=\"0\"/>")).ok);
+        check("n 0 and 95, key 0 and 127 are accepted",
+              parseProgram(withPads("<Pad n=\"0\" key=\"127\"/><Pad n=\"95\" key=\"0\"/>")).ok);
         check("two pads may share a key", parseProgram(withPads("<Pad n=\"0\" key=\"50\"/><Pad n=\"1\" key=\"50\"/>")).ok);
     }
 
@@ -126,9 +129,9 @@ int main() {
         check("a pad with a row plays its row's key (pad 4 -> 50)", p.padKey(4) == 50);
         check("a pad without a row plays 36 + n (pad 0 -> 36, pad 91 -> 127)", p.padKey(0) == 36 && p.padKey(91) == 127);
         check("a pad whose default passes 127 has no key (pad 92 -> -1)", p.padKey(92) == -1 && defaultPadKey(92) == -1);
-        check("n out of range has no key", p.padKey(-1) == -1 && p.padKey(128) == -1);
-        const Program q = parseProgram(withPads("<Pad n=\"100\" key=\"60\"/>")).program;
-        check("a row gives a pad past the defaults a key (pad 100 -> 60)", q.padKey(100) == 60);
+        check("n out of range has no key", p.padKey(-1) == -1 && p.padKey(96) == -1 && defaultPadKey(96) == -1);
+        const Program q = parseProgram(withPads("<Pad n=\"93\" key=\"60\"/>")).program;
+        check("a row gives a pad past the defaults a key (pad 93 -> 60)", q.padKey(93) == 60);
     }
 
     group("P4 setPadKey");
@@ -155,16 +158,17 @@ int main() {
         check("setting the default of a pad with no row writes none", r.ok && r.priorKey == 45 && p.pads.size() == 3);
 
         const Program keep = p;
-        check("n = 128 is refused, nothing changes", !setPadKey(p, 128, 40).ok && p == keep);
+        check("n = 96 is refused, nothing changes", !setPadKey(p, 96, 40).ok && p == keep);
+        note("refusal: " + setPadKey(p, 96, 40).error);
         check("key = 128 is refused, nothing changes", !setPadKey(p, 3, 128).ok && p == keep);
         const PadEditResult bad = setPadKey(p, 3, -1);
         check("key = -1 is refused for a pad with a default", !bad.ok && p == keep);
         note("refusal: " + bad.error);
 
         Program q;
-        r = setPadKey(q, 100, 60);
-        check("a pad past the defaults takes a key (prior -1)", r.ok && r.priorKey == -1 && q.padKey(100) == 60);
-        r = setPadKey(q, 100, -1);
+        r = setPadKey(q, 95, 60);
+        check("a pad past the defaults takes a key (prior -1)", r.ok && r.priorKey == -1 && q.padKey(95) == 60);
+        r = setPadKey(q, 95, -1);
         check("...and key -1 removes its row again (the undo)", r.ok && q.pads.empty());
 
         // An unknown attribute on a row survives a reassignment.

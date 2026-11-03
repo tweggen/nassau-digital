@@ -133,9 +133,9 @@ struct PadEditResult {
 /// Points pad n at `key` (DESIGN §13, settled 2026-11-03, pads): only the
 /// pad's key changes, no zone moves. A key equal to the pad's default removes
 /// its row; any other key sets the row's key (its unknown attributes kept) or
-/// adds a row in order of n. Refused, changing nothing: n outside 0..127, key
-/// outside 0..127. `key` = -1 is accepted only for a pad with no default (n >=
-/// 92) and removes its row, so the undo of a first assignment of such a pad is
+/// adds a row in order of n. Refused, changing nothing: n outside 0..95 (six
+/// banks), key outside 0..127. `key` = -1 is accepted only for a pad with no
+/// default (n 92..95) and removes its row, so the undo of a first assignment of such a pad is
 /// one more call.
 PadEditResult setPadKey(Program& prog, int n, int key);
 

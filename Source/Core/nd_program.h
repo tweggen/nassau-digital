@@ -160,7 +160,8 @@ struct Zone {
 /// not a zone: its zone is whatever zone covers that key, so several pads may
 /// play one zone at different keys. Pad n is the pad's index over all banks
 /// counting from 0 (bank b, pad p, both from 1: n = 16·(b−1) + (p−1)); it
-/// defaults to key 36 + n. A pad whose default would pass 127 (n >= 92) has
+/// defaults to key 36 + n. There are six banks, pads 0..95 (the author,
+/// 2026-11-03, QBX-277); a pad whose default would pass 127 (n 92..95) has
 /// NO key until a row gives it one.
 ///
 /// The program's `<Pads>` table holds one row for each pad that is NOT on its
@@ -168,7 +169,7 @@ struct Zone {
 /// Reassigning a pad changes only its key; no zone moves. The zone attribute
 /// `pad` is superseded by this table: it is still read and written (R4) but
 /// nothing derives meaning from it.
-constexpr int kNumPads = 128;          ///< valid n: 0..127
+constexpr int kNumPads = 96;           ///< six banks of 16: valid n 0..95
 constexpr int kPadsPerBank = 16;
 constexpr int kPadDefaultBaseKey = 36; ///< pad 0's default key, the GM kick
 
@@ -230,11 +231,11 @@ struct Program {
     std::pair<const Zone*, const Layer*> findLayer(uint32_t id) const;
 
     /// Pad n's key: its row's, else its default; -1 when it has none (n out
-    /// of 0..127, or a default beyond 127 and no row).
+    /// of 0..95, or a default beyond 127 and no row).
     int padKey(int n) const;
 };
 
-/// The pads that play `key`, lowest n first (every n 0..127, rows and
+/// The pads that play `key`, lowest n first (every n 0..95, rows and
 /// defaults alike). Empty for a key no pad plays.
 std::vector<int> padsOnKey(const Program& prog, int key);
 

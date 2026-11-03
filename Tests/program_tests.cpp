@@ -167,11 +167,11 @@ int main() {
               p.zones.size() == 5 && p.zones[0].layers.size() == 2 && p.zones[1].layers.size() == 4 &&
                   p.zones[2].layers.size() == 1 && p.zones[3].layers.empty());
         // The <Pads> table (DESIGN §13, settled 2026-11-03, pads): rows out of
-        // order of n (kept as read), a pad with no default key (n 100), and
+        // order of n (kept as read), a pad with no default key (n 93), and
         // unknown content on the table and on a row.
         check("the fixture has a <Pads> table of three rows, kept in file order, with unknown content",
               p.pads.size() == 3 && p.pads[0].n == 1 && p.pads[0].key == 38 && p.pads[1].n == 0 &&
-                  p.pads[1].key == 40 && p.pads[2].n == 100 && p.pads[2].key == 0 &&
+                  p.pads[1].key == 40 && p.pads[2].n == 93 && p.pads[2].key == 0 &&
                   !p.pads[0].extras.attributes.empty() && !p.pads[2].extras.children.empty() &&
                   !p.padsExtras.attributes.empty() && !p.padsExtras.children.empty());
         check("entities decoded in the name", p.name == "Kit & \"Friends\" \xE2\x80\x93 1");

@@ -11,8 +11,9 @@ constexpr const char* kLayerElement = "layer";
 constexpr const char* kPadsElement = "Pads";
 constexpr const char* kPadElement = "Pad";
 
-// One integer attribute of a <Pad> row, in [0, 127].
-bool padNumber(const XmlNode& n, const char* attr, int& out, std::string& error) {
+// One integer attribute of a <Pad> row, in [0, maxValue]: n 0..95 (six
+// banks), key 0..127.
+bool padNumber(const XmlNode& n, const char* attr, int maxValue, int& out, std::string& error) {
     const std::string* v = n.attribute(attr);
     long long i = 0;
     if (!v) {
@@ -23,8 +24,8 @@ bool padNumber(const XmlNode& n, const char* attr, int& out, std::string& error)
         error = "<Pad>: " + std::string(attr) + ": expected an integer, got \"" + *v + "\"";
         return false;
     }
-    if (i < 0 || i > 127) {
-        error = "<Pad>: " + std::string(attr) + ": " + *v + " is out of range [0, 127]";
+    if (i < 0 || i > maxValue) {
+        error = "<Pad>: " + std::string(attr) + ": " + *v + " is out of range [0, " + std::to_string(maxValue) + "]";
         return false;
     }
     out = static_cast<int>(i);
@@ -32,7 +33,7 @@ bool padNumber(const XmlNode& n, const char* attr, int& out, std::string& error)
 }
 
 // Reads the <Pads> table (DESIGN §13, settled 2026-11-03, pads). Refused: a
-// row without n or key, a value that is not an integer in 0..127, the same n
+// row without n or key, an n outside 0..95 or a key outside 0..127, the same n
 // twice. Unknown attributes and children are kept, of the table and of each
 // row.
 bool readPads(const XmlNode& pn, Program& prog, std::string& error) {
@@ -44,7 +45,8 @@ bool readPads(const XmlNode& pn, Program& prog, std::string& error) {
             continue;
         }
         PadRow row;
-        if (!padNumber(rn, "n", row.n, error) || !padNumber(rn, "key", row.key, error)) return false;
+        if (!padNumber(rn, "n", kNumPads - 1, row.n, error) || !padNumber(rn, "key", 127, row.key, error))
+            return false;
         if (!seen.insert(row.n).second) {
             error = "<Pads>: pad " + std::to_string(row.n) + " has more than one row";
             return false;

@@ -595,7 +595,8 @@ kept on load and written back. Proposal:
 </NassauDigitalProgram>
 ```
 
-`<Pads>` (§13, settled 2026-11-03, pads; built 2026-11-03) follows the zones
+`<Pads>` (§13, settled 2026-11-03, pads; built 2026-11-03; `n` 0..95, six
+banks) follows the zones
 and is written only when a pad is off its default key; here pad 1 (bank 1,
 pad 2) also plays the kick.
 
@@ -809,4 +810,17 @@ built for points §7 does not state; applied in §7):
 * **The zone attribute `pad` is superseded by `<Pads>`.** Attributes are
   append-only, so `pad` is still read and written unchanged, but nothing
   derives meaning from it.
+* **Six banks** (the author, 2026-11-03, answering QBX-277's questions):
+  pads 0..95, so `n` is 0..95 and a row with a larger `n` is refused; a
+  row's key is 0..127. Pads 92..95 have no default key (36 + n would pass
+  127) and exist only once a row gives them one.
+* **Selecting a pad from the device input works in every view**, not only
+  the Pad view, and is **not undoable**: it is the instance's live state,
+  like the last key played (the selection it leaves is saved with the
+  instance).
+* **A row already on its default key** that a file carries is **kept** as
+  read, not normalised away.
+* **Pads in a library overlay** (reassigning a pad of a read-only base, §8)
+  are a follow-up, qbx QBX-278; until then an overlay carries the base's
+  table unchanged.
 
