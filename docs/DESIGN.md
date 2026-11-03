@@ -790,8 +790,9 @@ built for points §7 does not state; applied in §7):
 * **Reassigning a pad points it elsewhere.** Only the pad's key changes; no
   zone moves.
 * **A note from the device input selects the pad mapped to that key**, in the
-  visible bank, and switches bank when the pad is in another one. Still
-  open: which pad is selected when several pads share that key.
+  visible bank, and switches bank when the pad is in another one. When
+  several pads share that key, the selected pad stays selected if it is one
+  of them; otherwise the lowest-numbered one is selected.
 * **Recording onto a pad replaces layer 1 of the zone covering the pad's
   key**, so every pad on that zone hears the new sample. When no zone covers
   the key, the take lands as a new one-key zone on that key. When **more than
