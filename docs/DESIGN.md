@@ -347,7 +347,8 @@ Fixed-size views, one model:
 * **Key** (the default): a keyboard with the zones drawn on it.
 * **Pad**: a 4×4 pad grid. Pads are **banks** of 16 consecutive keys starting
   at key 36 (the GM kick), so the GM drum range 35–81 is four banks; a pad can
-  be reassigned to any key.
+  be reassigned to any key, stored in the program's `<Pads>` table (§13,
+  2026-11-03).
 * **Map**: a key × velocity grid with every zone as a rectangle, for editing
   drum maps and splits; velocity gaps (§2) are marked.
 * **Zone**: the selected zone's knob rows (drive, filter, envelope, layers).
@@ -774,6 +775,30 @@ built for points §7 does not state; applied in §7):
 * **A Key-view take onto a key that already has a one-key zone** adds a second
   zone there rather than replacing it.
 
-Still open, not yet asked: what a zone's `pad` attribute means, and how a pad
-reassigned to another key is stored.
+**Settled on 2026-11-03, pads** (the author, asked after QBX-272):
+
+* **A reassigned pad lives in the program**, in a program-level table
+  `<Pads>` with one `<Pad n="…" key="…"/>` row for each pad that is not on
+  its default key. `n` is the pad's index over all banks, counting from 0, so
+  bank b, pad p (both counting from 1) is n = 16·(b−1) + (p−1) and defaults
+  to key 36 + n. The table travels with the program, into the library and
+  into an export.
+* **A pad names a key, not a zone.** The pad's zone is whatever zone covers
+  its key. Several pads may therefore play one zone at different keys: one
+  tonally playable tom zone, for example, with hi, mid and lo pads on three
+  keys inside it.
+* **Reassigning a pad points it elsewhere.** Only the pad's key changes; no
+  zone moves.
+* **A note from the device input selects the pad mapped to that key**, in the
+  visible bank, and switches bank when the pad is in another one. When
+  several pads share the key, the first in pad order is selected.
+* **Recording onto a pad replaces layer 1 of the zone covering the pad's
+  key**, so every pad on that zone hears the new sample. When no zone covers
+  the key, the take lands as a new one-key zone on that key. When **more than
+  one** zone covers it (velocity layers, round-robin groups), the take is
+  refused with a reason. This replaces the 2026-11-03 reading above ("the
+  first one-key zone on the pad's key").
+* **The zone attribute `pad` is superseded by `<Pads>`.** Attributes are
+  append-only, so `pad` is still read and written unchanged, but nothing
+  derives meaning from it.
 
