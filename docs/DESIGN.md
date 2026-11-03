@@ -347,14 +347,17 @@ Fixed-size views, one model:
 * **Key** (the default): a keyboard with the zones drawn on it.
 * **Pad**: a 4×4 pad grid. Pads are **banks** of 16 consecutive keys starting
   at key 36 (the GM kick), so the GM drum range 35–81 is four banks; a pad can
-  be reassigned to any key.
+  be reassigned to any key, stored in the program's `<Pads>` table (§13,
+  2026-11-03).
 * **Map**: a key × velocity grid with every zone as a rectangle, for editing
   drum maps and splits; velocity gaps (§2) are marked.
 * **Zone**: the selected zone's knob rows (drive, filter, envelope, layers).
 
 **Choosing the view** **(decided)**. A new instance starts in the view a
 per-user setting names (Key by default). Switching an instance to Pad is saved
-with that instance in the project, and it changes where recordings land.
+with that instance in the project, and it changes where recordings land. The view, the selected pad and the record input are the host's instance
+state, saved beside the program and never in it; the last key played is live
+and not saved (§13, settled 2026-11-02).
 
 **Recording** **(decided)** goes through qbx's recording, so input monitoring
 and latency compensation are qbx's. A new verb, `place-sampler-recording`,
@@ -365,9 +368,11 @@ take is not a fixed buffer until then. Where it lands:
 * **Pad view**: on the selected pad's key, as that pad's zone (replacing
   layer 1 if the zone exists).
 * **Key view**, empty program: a zone across the whole keyboard, played
-  chromatically around its root key.
+  chromatically around its root key, 60 (§13, 2026-11-03).
 * **Key view**, program with zones: a new one-key zone on the **last key
   played**, so a recording never lands on top of an existing drum map.
+* The Map and Zone views land a take as the Key view does; the pad's zone is
+  the first one-key zone on the pad's key (§13, 2026-11-03).
 
 A **threshold start** (recording begins at the first sound) is new work in
 qbx's recorder, not something that exists.
@@ -741,3 +746,60 @@ in §5 and built with it):
   not taken.)
 * tune, master tune and LFO pitch still apply to the read rate in tempo
   modes, accepted as is for now (a zone with tune ≠ 0 drifts off tempo).
+
+**Settled on 2026-11-02** (the author, answering qbx QBX-272's questions on
+§7; applied in §7 and built with qbx's Q6):
+
+* **The view, the selected pad and its bank are instance state of the host,
+  not of the program.** In Smaragd they are model state of the instance's
+  program object, saved in qbx's own element beside the program and **never**
+  in the program text, so an exported program never carries them.
+* **They are set by a verb from Q6 on**, not only by the editor:
+  `set-sampler-view` (`view`, `padBank`, `pad`) is a real, undoable verb,
+  brought forward from Q7; the editor (Q7) drives the same verb.
+* **The last key played** is the last note seen by the instance's **device
+  MIDI input tap**, the same tap Q7.2's hand selection uses, not the engine's
+  event feed. It is live state and is **not saved**; a headless case sets it by
+  injecting MIDI into that input.
+* **The record input** (Q-1's `audio:<device>:<mask>`) sits beside the view
+  state on the host's instance object, **not** in the program. A headless case
+  feeds it through qbx's existing file input device.
+
+**Settled on 2026-11-03** (the author, accepting the readings qbx QBX-272
+built for points §7 does not state; applied in §7):
+
+* **Map and Zone views land a take as the Key view does.**
+* **The pad's zone** is the first one-key zone on the pad's key; a new take
+  replaces its layer 1.
+* **The whole-keyboard zone** (Key view, empty program) is rooted on key 60.
+* **A Key-view take onto a key that already has a one-key zone** adds a second
+  zone there rather than replacing it.
+
+**Settled on 2026-11-03, pads** (the author, asked after QBX-272):
+
+* **A reassigned pad lives in the program**, in a program-level table
+  `<Pads>` with one `<Pad n="…" key="…"/>` row for each pad that is not on
+  its default key. `n` is the pad's index over all banks, counting from 0, so
+  bank b, pad p (both counting from 1) is n = 16·(b−1) + (p−1) and defaults
+  to key 36 + n. The table travels with the program, into the library and
+  into an export.
+* **A pad names a key, not a zone.** The pad's zone is whatever zone covers
+  its key. Several pads may therefore play one zone at different keys: one
+  tonally playable tom zone, for example, with hi, mid and lo pads on three
+  keys inside it.
+* **Reassigning a pad points it elsewhere.** Only the pad's key changes; no
+  zone moves.
+* **A note from the device input selects the pad mapped to that key**, in the
+  visible bank, and switches bank when the pad is in another one. When
+  several pads share that key, the selected pad stays selected if it is one
+  of them; otherwise the lowest-numbered one is selected.
+* **Recording onto a pad replaces layer 1 of the zone covering the pad's
+  key**, so every pad on that zone hears the new sample. When no zone covers
+  the key, the take lands as a new one-key zone on that key. When **more than
+  one** zone covers it (velocity layers, round-robin groups), the take is
+  refused with a reason. This replaces the 2026-11-03 reading above ("the
+  first one-key zone on the pad's key").
+* **The zone attribute `pad` is superseded by `<Pads>`.** Attributes are
+  append-only, so `pad` is still read and written unchanged, but nothing
+  derives meaning from it.
+
