@@ -938,6 +938,36 @@ DESIGN §7, §9.3. Qt, following Smaragd's look.
 * **Q7.4** Hand check by the author: every label and value readable in every
   view; a velocity gap shows in the Map view.
 
+**Q7.1–Q7.3, Q7.q1 DONE 2026-11-03** (qbx#344, QBX-279), with no core change
+(the pin stays at `eba2961`). The editor is a qbx window, one per instance,
+opened from the FX strip's Edit through a new pluginui app-editor registry
+keyed by uid; the author's answers of 2026-11-03 are in DESIGN §13 ("Settled
+on 2026-11-03, editor"). Q7.1 (`sampler_q7_views`, `sampler_q7_default_view`):
+Key 896×144, Pad 392×432, Map 808×416, Zone 760×400, each fixed (asserted as
+constraints, minimum = maximum, never a rectangle), the window pinned to the
+view shown; a switch is `set-sampler-view`, one undo step; the view and the
+editor-open flag survive a save and reload; a new instance starts in the
+per-user default (`sampler/defaultView`: map, pad, an unknown value as key),
+and an existing one keeps its view. Q7.2 (`sampler_q7_hand_select`, injected
+MIDI through `sampler-hold-keys` into the capture device input): one key
+selects its zone, two keys both, the selection stays after release until
+another key is held, no undo step is added (one undo takes back a view switch
+made before every key), the tap follows the input's channel, exists only while
+the editor is open, a sequenced note selects nothing, the selection is not
+saved. Q7.3 (`sampler_q7_xml_pane`): one apply is one undo step, the address
+implied (on an instance on track 1) or written, five refusals add none; verb
+and attribute names complete from the verbs' declared attributes. Q7.q1: new
+`samplerui/CONTRACT.md`, the registry in pluginui's CONTRACT, every widget
+gated off screen through describe/trigger seams (also `sampler_q7_knobs`,
+`sampler_q7_select_views`, `sampler_q7_drop`). 38 qbx sabotages, 37 bite (an
+asset drop without its explicit zone id cannot: `nextId` gives the same id);
+qbx suite 583/583. Not gated: painting, the completer popup, the reopen of an
+editor saved open under `--test-case`; not built: `media:` drops, an Options
+control for the default view. Corrections: qbx proposal 56 §11 "Q7".
+
+**Q7.4 OPEN**: the author's hand check (labels readable in every view; the
+velocity gap visible in the Map view).
+
 ### Q8 — Multiple outputs in qbx *(needs X2)*
 
 DESIGN §3.1.

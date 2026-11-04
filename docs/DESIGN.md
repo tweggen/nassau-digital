@@ -824,3 +824,29 @@ built for points §7 does not state; applied in §7):
   are a follow-up, qbx QBX-278; until then an overlay carries the base's
   table unchanged.
 
+
+**Settled on 2026-11-03, editor** (the author, in an interview before qbx
+QBX-279 built the editor; applied in §7):
+
+* **Hand selection is not an undo step.** Keys held on the instance's device
+  MIDI input while its editor is open set the zone selection directly, like a
+  device note's pad selection. The scripted `select-zones` verb stays
+  undoable.
+* **The selection persists after the keys are released**, until another key
+  is held. Several keys held together select all of their zones.
+* **The zone selection is not saved**: it is the instance's live state.
+* **Scope of the views**: Key, Map and Pad display and select only. Edits go
+  through the Zone view's knob rows, the XML command pane and drag and drop.
+  Dragging zone edges in the Map view is a follow-up, qbx QBX-280.
+
+**Accepted on 2026-11-03, editor** (the readings QBX-279 built, put to the
+author afterwards):
+
+* A held key that no zone covers empties the zone selection.
+* A mouse click on a zone in the Key or Map view selects through
+  `select-zones`, so it is an undo step; only hand selection is not.
+* A Zone-view knob sets its value on every selected zone, one undo step per
+  drag.
+* A drop follows the pad landing: onto a zone, its layer 1 takes the sample;
+  onto a key or pad, the one zone covering it does; no zone gives a new
+  one-key zone; more than one is refused with a reason.
