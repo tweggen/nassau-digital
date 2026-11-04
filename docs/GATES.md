@@ -710,6 +710,32 @@ instead of the running program (3), refreshing edits that did not drift (1),
 `undoRebase` ignoring later edits (1) or leaving `current` (1), rebase
 leaving `current` on the old base (1).
 
+*`set-pad`, 2026-11-04 (DESIGN §8, the author's decision; qbx QBX-278):*
+`recordPadEdit` / the stored `<set-pad n key key.was/>`. `Tests/overlay_tests`
+139/139 (18 new checks; 121 before): on a library whose table has pad 2 on its own default
+(38) and pad 5 on 36, three recorded edits write `key.was` = the row's key
+(`36`), the default (`37` for pad 1) and `none` (pad 93); applied on version 3
+they equal the reassignments made directly, nothing drifted, the base
+untouched; byte-stable round trip. On version 4 (pad 5 moved to 42, pad 1
+given 47) #0 and #1 are drifted (`key` 36 → 42, 37 → 47) and the overlay's
+keys still play; a base that gives pad 93 a row drifts it (`none` → 61); a
+base with no table orphans nothing. Rebase refreshes exactly #0 / #1
+(`key.was="42"` / `"47"`), leaves #2 byte for byte, clears the drift and
+changes nothing that plays; its undo restores. Flatten writes rows 1 → 50,
+5 → 40, 93 → 60 and no `libraryVersion`; a set-pad to the default key leaves
+no row. Undo over a row on its default key restores the table, rows and order;
+undoing all three empties the overlay and clears `baseVersion`. Refused,
+changing nothing: recording n 96 / −1, key 128 / −1; stored n out of range,
+key 128, no `key.was`, `key.was="x"`, another attribute, no n, `key="+2"`.
+Watched failing (12 sabotages, all biting): `key.was` = the new key (12
+checks), no drift report (3), a drifted edit not applied (5), orphaned on a
+base with no table (1), rebase not refreshing set-pad (2), flatten dropping the
+table (2), undo through `setPadKey(prior)` instead of the saved table (1),
+a stored relative key accepted (1), another attribute accepted (1), a missing
+`key.was` accepted (1); the stored key range unchecked bites only together
+with `setPadKey`'s own range check (1), and the recorded key range only with
+both of those (2): the defences are redundant, each alone bites nothing.
+
 * **C8.1** Base v3 + an overlay that edits zone 17: what plays equals a
   program with the edit made directly (`cmp`).
 * **C8.2** Base v4 drops zone 17: the edit is kept, reported as orphaned, and

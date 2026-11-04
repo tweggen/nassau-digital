@@ -24,6 +24,16 @@
 //   <set-zone zone="ID" p="new" p.was="previous" .../>
 //   <set-layer layer="ID" p="new" p.was="previous" .../>
 //   <set-program p="new" p.was="previous" .../>          (2026-11-01)
+//   <set-pad n="N" key="K" key.was="W"/>                  (2026-11-04)
+// set-pad (the author's decision of 2026-11-04, QBX-278) reassigns pad n
+// (0..95) to key K (0..127) with set-program's semantics: `key.was` is the
+// pad's key before the edit, its row's or, with no row, its default 36 + n;
+// a pad 92..95 with no row has no key and its `key.was` is written "none".
+// A base whose key for the pad is no longer `key.was` still plays the
+// overlay's key and reports the edit Drifted ({"key", was, now}); rebase
+// refreshes `key.was`; a set-pad is never orphaned (there is always a
+// table); flatten writes the resulting <Pads> table (a key equal to the
+// pad's default leaves no row, as setPadKey() does).
 // and the structural verbs (2026-11-01), which replace nothing and so carry
 // no `.was`:
 //   <add-zone zone="ID" p="value" .../>                    a zone of the overlay's own
@@ -68,7 +78,9 @@
 //              reverse, a stored relative "+n", a stored zone="all" or zone
 //              list, which needs expansion, an added id outside the overlay
 //              range or already in the base, a full zone, a set-program of
-//              `version` or `libraryVersion`). Kept, like an orphan; the
+//              `version` or `libraryVersion`, a set-pad whose n, key or
+//              key.was is missing or out of range, or with any other
+//              attribute). Kept, like an orphan; the
 //              program is as if it were not there;
 //   Unknown    a verb this version does not understand (a newer writer's).
 //              Kept and skipped.
@@ -180,7 +192,7 @@ OverlayResult applyOverlay(const Program& base, const Overlay& overlay);
 /// the flattened program does not carry it); a hidden zone is not in it.
 OverlayResult flatten(const Program& base, const Overlay& overlay);
 
-enum class RecordedKind { SetZone = 0, SetLayer, SetProgram, AddZone, AddLayer, HideZone, HideLayer };
+enum class RecordedKind { SetZone = 0, SetLayer, SetProgram, AddZone, AddLayer, HideZone, HideLayer, SetPad };
 
 /// What one recorded edit appended to an overlay, kept for its undo.
 struct RecordedEdit {
@@ -195,6 +207,10 @@ struct RecordedEdit {
     RemovedZone hidden;           ///< HideZone: the zone and where it was, for the undo
     RemovedLayer hiddenLayer;     ///< HideLayer: the layer and where it was, for the undo
     bool stampedBaseVersion = false;  ///< this edit recorded the overlay's baseVersion
+    /// SetPad: the program's <Pads> table before the edit, rows and their
+    /// order, for the undo (setPadKey() alone would drop a row a base wrote
+    /// on its default key).
+    std::vector<PadRow> priorPads;
 };
 
 /// Makes a zone edit on `current` (what plays: the base with the overlay
@@ -212,6 +228,11 @@ RecordedEdit recordLayerEdit(Overlay& overlay, Program& current, const std::vect
 /// The same for the program's own attributes: one set-program. `version` and
 /// `libraryVersion` are refused (not an overlay's to edit).
 RecordedEdit recordProgramEdit(Overlay& overlay, Program& current, const std::vector<ParamEdit>& edits);
+/// Reassigns pad n to `key` on `current` and records it as one set-pad with
+/// `key.was`, the pad's key before the edit (its row's, its default, or
+/// "none" for a pad 92..95 without a row). Refused, changing nothing: n
+/// outside 0..95, key outside 0..127 (2026-11-04, QBX-278).
+RecordedEdit recordPadEdit(Overlay& overlay, Program& current, int n, int key);
 /// Adds `zone` (with its layers) as the overlay's own: the zone and each
 /// layer get the next ids of the overlay range (whatever ids they carried are
 /// ignored); recorded as one add-zone and one add-layer per layer. RecordedEdit::id

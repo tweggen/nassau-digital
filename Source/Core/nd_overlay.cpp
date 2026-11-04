@@ -15,6 +15,8 @@ constexpr const char* kAddZone = "add-zone";
 constexpr const char* kAddLayer = "add-layer";
 constexpr const char* kHideZone = "hide-zone";
 constexpr const char* kHideLayer = "hide-layer";
+constexpr const char* kSetPad = "set-pad";
+constexpr const char* kNoKey = "none";  ///< set-pad key.was of a pad 92..95 without a row
 constexpr const char* kWasSuffix = ".was";
 constexpr size_t kWasLength = 4;
 
@@ -249,10 +251,81 @@ OverlayEditReport applySetProgram(Program& prog, const XmlNode& verb, OverlayEdi
     return rep;
 }
 
+// A pad's key as set-pad writes it: the number, or "none" for a pad with
+// no key (92..95 without a row).
+std::string padKeyText(int key) { return key < 0 ? std::string(kNoKey) : std::to_string(key); }
+
+// A plain integer as set-pad stores it: never the command language's
+// relative "+n", which is resolved when an edit is made and never stored (§8).
+bool plainInteger(const std::string* text, long long& v) {
+    return text && !text->empty() && (*text)[0] != '+' && parseInteger(*text, v);
+}
+
+// Reads set-pad's n and key (each a plain integer in range) and key.was (an
+// integer 0..127 or "none"), normalised as padKeyText() writes it. Any other
+// attribute, or a child, is refused: the verb has nothing else to say.
+bool readSetPad(const XmlNode& verb, int& n, int& key, std::string& was, std::string& error) {
+    for (const auto& a : verb.attributes) {
+        if (a.first != "n" && a.first != "key" && a.first != std::string("key") + kWasSuffix) {
+            error = "unknown attribute \"" + a.first + "\" (set-pad takes n, key and key.was)";
+            return false;
+        }
+    }
+    if (!verb.children.empty()) {
+        error = "takes no children";
+        return false;
+    }
+    const std::string* nt = verb.attribute("n");
+    const std::string* kt = verb.attribute("key");
+    const std::string* wt = verb.attribute(std::string("key") + kWasSuffix);
+    long long v = 0;
+    if (!plainInteger(nt, v) || v < 0 || v >= kNumPads) {
+        error = "needs n=\"0.." + std::to_string(kNumPads - 1) + "\"";
+        return false;
+    }
+    n = static_cast<int>(v);
+    if (!plainInteger(kt, v) || v < 0 || v > 127) {
+        error = "needs key=\"0..127\"";
+        return false;
+    }
+    key = static_cast<int>(v);
+    if (!wt) {
+        error = "key: no key.was (the value it replaces)";
+        return false;
+    }
+    if (*wt == kNoKey) {
+        was = kNoKey;
+    } else if (plainInteger(wt, v) && v >= 0 && v <= 127) {
+        was = std::to_string(v);
+    } else {
+        error = "key.was: expected 0..127 or \"none\", got \"" + *wt + "\"";
+        return false;
+    }
+    return true;
+}
+
+// set-pad (the author's decision of 2026-11-04, QBX-278): set-program's
+// semantics for one row of the <Pads> table. Never orphaned: every pad
+// 0..95 has a place in the table, row or not.
+OverlayEditReport applySetPad(Program& prog, const XmlNode& verb, OverlayEditReport rep) {
+    int n = 0, key = 0;
+    std::string was, why;
+    if (!readSetPad(verb, n, key, was, why)) return refused(rep, verb.name, why);
+    const std::string now = padKeyText(prog.padKey(n));
+    const PadEditResult r = setPadKey(prog, n, key);
+    if (!r.ok) return refused(rep, verb.name, r.error);
+    if (was != now) {
+        rep.state = OverlayEditState::Drifted;
+        rep.drift.push_back({"key", was, now});
+    }
+    return rep;
+}
+
 OverlayEditReport applyOne(Program& prog, const XmlNode& verb, size_t index) {
     OverlayEditReport rep;
     rep.index = index;
     if (verb.name == kSetProgram) return applySetProgram(prog, verb, rep);
+    if (verb.name == kSetPad) return applySetPad(prog, verb, rep);
     if (verb.name == kAddZone) return applyAddZone(prog, verb, rep);
     if (verb.name == kAddLayer) return applyAddLayer(prog, verb, rep);
     if (verb.name == kHideZone) return applyHideZone(prog, verb, rep);
@@ -583,6 +656,30 @@ RecordedEdit recordProgramEdit(Overlay& overlay, Program& current, const std::ve
                            &findProgramIn, &setProgramById, {0});
 }
 
+RecordedEdit recordPadEdit(Overlay& overlay, Program& current, int n, int key) {
+    RecordedEdit rec;
+    rec.kind = RecordedKind::SetPad;
+    if (n < 0 || n >= kNumPads) {
+        rec.error = "pad " + std::to_string(n) + " is not a pad (0.." + std::to_string(kNumPads - 1) + ")";
+        return rec;
+    }
+    if (key < 0 || key > 127) {
+        rec.error = "key " + std::to_string(key) + " is not a MIDI key (0..127)";
+        return rec;
+    }
+    XmlNode v;
+    v.name = kSetPad;
+    v.attributes.emplace_back("n", std::to_string(n));
+    v.attributes.emplace_back("key", std::to_string(key));
+    v.attributes.emplace_back(std::string("key") + kWasSuffix, padKeyText(current.padKey(n)));
+    Program next;
+    if (!applyStructural(current, {v}, next, rec.error)) return rec;
+    rec.priorPads = current.pads;
+    append(overlay, current, rec, {v});
+    current = std::move(next);
+    return rec;
+}
+
 RecordedEdit recordAddZone(Overlay& overlay, Program& current, Zone zone) {
     RecordedEdit rec;
     rec.kind = RecordedKind::AddZone;
@@ -684,6 +781,7 @@ bool undoRecordedEdit(Overlay& overlay, Program& current, const RecordedEdit& ed
         case RecordedKind::AddLayer: ok = removeLayer(prev, edit.id).ok; break;
         case RecordedKind::HideZone: ok = reinsertZone(prev, edit.hidden); break;
         case RecordedKind::HideLayer: ok = reinsertLayer(prev, edit.hiddenLayer); break;
+        case RecordedKind::SetPad: prev.pads = edit.priorPads; ok = true; break;  // the table as it was
     }
     if (!ok) return false;
     overlay.edits.resize(edit.first);
@@ -714,6 +812,13 @@ void refreshVerb(XmlNode& verb, const Program& prog) {
         if (const Zone* z = prog.findZone(id)) refreshWas<Zone>(verb, *z, &findZoneParam);
     } else if (verb.name == kSetLayer && verb.attribute("layer") && parseTargetId(*verb.attribute("layer"), id)) {
         if (const Layer* l = prog.findLayer(id).second) refreshWas<Layer>(verb, *l, &findLayerParam);
+    } else if (verb.name == kSetPad) {
+        // Only a set-pad that applied (drifted) is refreshed, so n is valid.
+        long long n = 0;
+        const std::string wasName = std::string("key") + kWasSuffix;
+        if (verb.attribute("n") && parseInteger(*verb.attribute("n"), n))
+            for (auto& a : verb.attributes)
+                if (a.first == wasName) a.second = padKeyText(prog.padKey(static_cast<int>(n)));
     }
 }
 
