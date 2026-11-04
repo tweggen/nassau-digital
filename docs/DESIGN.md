@@ -468,6 +468,18 @@ not change, because every sampler meets them:
   back as it was, rows and order. Refused: `n` outside 0..95, `key` outside
   0..127, a `key.was` that is neither 0..127 nor `none`, a relative `+n`, any
   other attribute.
+* **Hiding a pad's row** **(the author's decision of 2026-11-04, qbx
+  QBX-278)**: `<hide-pad n="…"/>`, the same mechanics as hiding a zone or a
+  layer. One base `<Pads>` row is left out of what plays, so the pad goes
+  back to its default key (a pad 92..95 has none and ceases to exist); the
+  base keeps the row, undo puts it back where it was (the table's order
+  kept), flatten drops it, and a base without the row orphans the hide (the
+  orphan report's shape, naming n). A hide is made only of a row the base
+  has: a pad with no base row is refused with a reason, and so is a row that
+  does not play at that point (already hidden, or an overlay `set-pad` put
+  the pad on its default key). A `set-pad` after the hide records the
+  default as its `key.was`; a hide after a `set-pad` of a base row removes
+  the row the `set-pad` changed (the simplest reversible reading).
 
 This is what Kontakt, Logic's Sampler and SFZ do implicitly (edits live in the
 instance; the library is untouched; "save as" writes a new file that refers to
@@ -626,9 +638,10 @@ layer, since ALL is expanded when the edit is made:
 </NassauDigitalOverlay>
 ```
 
-The verb of 2026-11-04 (§8) is `set-pad` (`<set-pad n="5" key="40"
+The verbs of 2026-11-04 (§8) are `set-pad` (`<set-pad n="5" key="40"
 key.was="36"/>`, one pad of the `<Pads>` table; `key.was="none"` for a pad
-92..95 with no row). The verbs of 2026-11-01 (§8) are `set-program` (no address, `attr`/`attr.was`
+92..95 with no row) and `hide-pad` (`<hide-pad n="93"/>`, one base row
+hidden from what plays). The verbs of 2026-11-01 (§8) are `set-program` (no address, `attr`/`attr.was`
 pairs), `add-zone` and `add-layer` (every attribute written, as in a program
 file; a zone the overlay adds is one `add-zone` followed by one `add-layer`
 per layer), `hide-zone` and `hide-layer` (`<hide-layer layer="ID"/>`); the overlay's own `nextId` is a root attribute,
@@ -837,8 +850,9 @@ built for points §7 does not state; applied in §7):
 * **A row already on its default key** that a file carries is **kept** as
   read, not normalised away.
 * **Pads in a library overlay** (reassigning a pad of a read-only base, §8)
-  are the overlay verb `set-pad` (the author, 2026-11-04, qbx QBX-278; §8,
-  §12); every other overlay verb carries the base's table unchanged.
+  are the overlay verbs `set-pad` and `hide-pad` (the author, 2026-11-04,
+  qbx QBX-278; §8, §12); every other overlay verb carries the base's table
+  unchanged.
 
 
 **Settled on 2026-11-03, editor** (the author, in an interview before qbx

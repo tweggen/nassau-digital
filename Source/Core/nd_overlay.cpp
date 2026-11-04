@@ -16,6 +16,7 @@ constexpr const char* kAddLayer = "add-layer";
 constexpr const char* kHideZone = "hide-zone";
 constexpr const char* kHideLayer = "hide-layer";
 constexpr const char* kSetPad = "set-pad";
+constexpr const char* kHidePad = "hide-pad";
 constexpr const char* kNoKey = "none";  ///< set-pad key.was of a pad 92..95 without a row
 constexpr const char* kWasSuffix = ".was";
 constexpr size_t kWasLength = 4;
@@ -321,11 +322,34 @@ OverlayEditReport applySetPad(Program& prog, const XmlNode& verb, OverlayEditRep
     return rep;
 }
 
+// hide-pad (the author's decision of 2026-11-04, QBX-278): hide-zone's
+// mechanics for one row of the <Pads> table. The row is left out of what
+// plays, so the pad goes back to its default key (a pad 92..95 has none and
+// ceases to exist); the others keep their order. A program without the row
+// at that point orphans the hide, missingId = n.
+OverlayEditReport applyHidePad(Program& prog, const XmlNode& verb, OverlayEditReport rep) {
+    long long v = 0;
+    if (verb.attributes.size() != 1 || !verb.children.empty() || !verb.attribute("n"))
+        return refused(rep, verb.name, "takes n=\"0.." + std::to_string(kNumPads - 1) + "\" and nothing else");
+    if (!plainInteger(verb.attribute("n"), v) || v < 0 || v >= kNumPads)
+        return refused(rep, verb.name, "needs n=\"0.." + std::to_string(kNumPads - 1) + "\"");
+    const int n = static_cast<int>(v);
+    auto it = std::find_if(prog.pads.begin(), prog.pads.end(), [n](const PadRow& r) { return r.n == n; });
+    if (it == prog.pads.end()) {
+        rep.state = OverlayEditState::Orphaned;
+        rep.missingId = static_cast<uint32_t>(n);
+        return rep;
+    }
+    prog.pads.erase(it);
+    return rep;
+}
+
 OverlayEditReport applyOne(Program& prog, const XmlNode& verb, size_t index) {
     OverlayEditReport rep;
     rep.index = index;
     if (verb.name == kSetProgram) return applySetProgram(prog, verb, rep);
     if (verb.name == kSetPad) return applySetPad(prog, verb, rep);
+    if (verb.name == kHidePad) return applyHidePad(prog, verb, rep);
     if (verb.name == kAddZone) return applyAddZone(prog, verb, rep);
     if (verb.name == kAddLayer) return applyAddLayer(prog, verb, rep);
     if (verb.name == kHideZone) return applyHideZone(prog, verb, rep);
@@ -680,6 +704,37 @@ RecordedEdit recordPadEdit(Overlay& overlay, Program& current, int n, int key) {
     return rec;
 }
 
+RecordedEdit recordHidePad(Overlay& overlay, Program& current, const Program& base, int n) {
+    RecordedEdit rec;
+    rec.kind = RecordedKind::HidePad;
+    if (n < 0 || n >= kNumPads) {
+        rec.error = "pad " + std::to_string(n) + " is not a pad (0.." + std::to_string(kNumPads - 1) + ")";
+        return rec;
+    }
+    const auto hasRow = [n](const Program& p) {
+        return std::any_of(p.pads.begin(), p.pads.end(), [n](const PadRow& r) { return r.n == n; });
+    };
+    if (!hasRow(base)) {
+        rec.error = "pad " + std::to_string(n) + " has no row in the base (nothing to hide)";
+        return rec;
+    }
+    if (!hasRow(current)) {
+        rec.error = "pad " + std::to_string(n) + "'s base row does not play now (already hidden, or the overlay "
+                    "set the pad to its default key)";
+        return rec;
+    }
+    XmlNode v;
+    v.name = kHidePad;
+    v.attributes.emplace_back("n", std::to_string(n));
+    Program next;
+    if (!applyStructural(current, {v}, next, rec.error)) return rec;
+    rec.priorPads = current.pads;
+    rec.id = static_cast<uint32_t>(n);
+    append(overlay, current, rec, {v});
+    current = std::move(next);
+    return rec;
+}
+
 RecordedEdit recordAddZone(Overlay& overlay, Program& current, Zone zone) {
     RecordedEdit rec;
     rec.kind = RecordedKind::AddZone;
@@ -782,6 +837,7 @@ bool undoRecordedEdit(Overlay& overlay, Program& current, const RecordedEdit& ed
         case RecordedKind::HideZone: ok = reinsertZone(prev, edit.hidden); break;
         case RecordedKind::HideLayer: ok = reinsertLayer(prev, edit.hiddenLayer); break;
         case RecordedKind::SetPad: prev.pads = edit.priorPads; ok = true; break;  // the table as it was
+        case RecordedKind::HidePad: prev.pads = edit.priorPads; ok = true; break;  // the row back where it was
     }
     if (!ok) return false;
     overlay.edits.resize(edit.first);

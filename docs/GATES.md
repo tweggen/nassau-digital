@@ -736,6 +736,26 @@ a stored relative key accepted (1), another attribute accepted (1), a missing
 with `setPadKey`'s own range check (1), and the recorded key range only with
 both of those (2): the defences are redundant, each alone bites nothing.
 
+*`hide-pad`, 2026-11-04 (DESIGN §8, the author's decision; qbx QBX-278):*
+`recordHidePad` / the stored `<hide-pad n/>`. `Tests/overlay_tests` 151/151
+(12 more checks): on a library with rows 2 → 50, 5 → 36 and 93 → 70, hiding
+5 and 93 records `<hide-pad n="5"/>` / `<hide-pad n="93"/>`; what plays has
+pad 5 on its default 41, pad 93 with no key, pad 2 on its row, and the base
+keeps all three rows; byte-stable round trip; flatten writes only pad 2's
+row. Version 2 (no row for 93) orphans exactly #1 (missingId 93) and applies
+#0; rebase leaves the orphan byte for byte. A set-pad after the hide records
+`key.was="41"`. Refused, changing nothing, with the reason: a pad with no
+base row (also one only the overlay gave a row), a row already hidden, a
+base row the overlay put on its default key, n 96. Undo of both restores the
+rows in their places. Stored hide-pads out of range, without n, with another
+attribute, relative or not a number are refused. Watched failing (9
+sabotages, all biting): the hide a no-op (6), clearing the whole table (6),
+a missing row not orphaned (2), undo not restoring (1), undo appending the
+row at the end (1), record without the base-row check (1), without the
+current-row check (1: only the reason text; `applyStructural` refuses the
+hide anyway, so that check is a redundant defence and gives the message),
+another stored attribute accepted (1), a relative n accepted (1).
+
 * **C8.1** Base v3 + an overlay that edits zone 17: what plays equals a
   program with the edit made directly (`cmp`).
 * **C8.2** Base v4 drops zone 17: the edit is kept, reported as orphaned, and

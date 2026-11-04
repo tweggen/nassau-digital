@@ -34,6 +34,13 @@
 // refreshes `key.was`; a set-pad is never orphaned (there is always a
 // table); flatten writes the resulting <Pads> table (a key equal to the
 // pad's default leaves no row, as setPadKey() does).
+//   <hide-pad n="N"/>                                     (2026-11-04)
+// hide-pad (the author, 2026-11-04) is hide-zone's mechanics for one row of
+// the <Pads> table: the row is left out of what plays (the pad goes back to
+// its default key; a pad 92..95 ceases to exist), undo puts it back where it
+// was, flatten drops it, and a program without the row at that point orphans
+// the hide (OverlayEditReport::missingId = n). It is recorded only for a row
+// the base has and that still plays.
 // and the structural verbs (2026-11-01), which replace nothing and so carry
 // no `.was`:
 //   <add-zone zone="ID" p="value" .../>                    a zone of the overlay's own
@@ -68,7 +75,8 @@
 //              parameter. Compared as the values round-trip through the
 //              format (formatParam text of each), so float noise cannot fire it;
 //   Orphaned   the zone or layer it names is not in this base (a newer base
-//              dropped it; for add-layer, the zone it adds to). The edit is
+//              dropped it; for add-layer, the zone it adds to; for
+//              hide-pad, the pad's row, missingId = n). The edit is
 //              KEPT in the overlay, never dropped (DESIGN §8: kept and shown
 //              greyed out), and applies again if a base brings the id back.
 //              Nothing else changes: every other edit applies as it would
@@ -192,7 +200,7 @@ OverlayResult applyOverlay(const Program& base, const Overlay& overlay);
 /// the flattened program does not carry it); a hidden zone is not in it.
 OverlayResult flatten(const Program& base, const Overlay& overlay);
 
-enum class RecordedKind { SetZone = 0, SetLayer, SetProgram, AddZone, AddLayer, HideZone, HideLayer, SetPad };
+enum class RecordedKind { SetZone = 0, SetLayer, SetProgram, AddZone, AddLayer, HideZone, HideLayer, SetPad, HidePad };
 
 /// What one recorded edit appended to an overlay, kept for its undo.
 struct RecordedEdit {
@@ -233,6 +241,12 @@ RecordedEdit recordProgramEdit(Overlay& overlay, Program& current, const std::ve
 /// "none" for a pad 92..95 without a row). Refused, changing nothing: n
 /// outside 0..95, key outside 0..127 (2026-11-04, QBX-278).
 RecordedEdit recordPadEdit(Overlay& overlay, Program& current, int n, int key);
+/// Hides pad n's base row from what plays by a stored hide-pad (2026-11-04,
+/// QBX-278): the pad goes back to its default key, or a pad 92..95 ceases to
+/// exist; the base keeps the row. Refused, changing nothing: n outside 0..95,
+/// no row for n in `base` (nothing to hide), or no row for n in `current`
+/// (already hidden, or an overlay set-pad put the pad on its default key).
+RecordedEdit recordHidePad(Overlay& overlay, Program& current, const Program& base, int n);
 /// Adds `zone` (with its layers) as the overlay's own: the zone and each
 /// layer get the next ids of the overlay range (whatever ids they carried are
 /// ignored); recorded as one add-zone and one add-layer per layer. RecordedEdit::id
