@@ -27,6 +27,10 @@
 //      flatten drops them; rebase accepts a new base (baseVersion and the
 //      drifted .was refreshed, undoable); every new
 //      edit kind is undone exactly (cmp) and orphaned like the others.
+// The author's decision of 2026-11-04 (QBX-278): set-pad reassigns one pad
+//      with key.was (row, default 36 + n, or "none"), drift reported, never
+//      orphaned, refreshed by rebase, flattened into the <Pads> table, undone
+//      exactly (the table's rows and order).
 //
 // The library: three zones on keys 36, 38 and 40 (ids 5, 9, 17; tune 1, -3
 // and the default 0), each with one layer (ids 6, 10, 18) playing its own
@@ -903,6 +907,212 @@ int main() {
         check("undo of the rebase: the overlay's bytes and what played before (version 3) again",
               undoRebase(o, current, rb) && writeOverlay(o) == writeOverlay(before) && current == currentBefore &&
                   applyOverlay(lib4, o).drifted() == std::vector<size_t>({0, 2, 6}));
+    }
+
+    // ------------------------------------------------------------- set-pad ---
+    group("2026-11-04 (the author, QBX-278) set-pad: a pad reassignment with key.was, set-program's semantics");
+    {
+        // The library's table: pad 2 has a row ON its default key (38), pad 5
+        // plays the kick (36). Version 4 moved pad 5 to 42, gave pad 1 a row
+        // (47) and dropped pad 2's row.
+        Program lib3 = v3;
+        lib3.libraryVersion = "3";
+        lib3.pads = {PadRow{2, 38, {}}, PadRow{5, 36, {}}};
+        Program lib4 = lib3;
+        lib4.libraryVersion = "4";
+        lib4.pads = {PadRow{1, 47, {}}, PadRow{5, 42, {}}};
+        Overlay o;
+        Program current = lib3;
+        const std::string textBefore = writeOverlay(o);
+        const RecordedEdit e0 = recordPadEdit(o, current, 5, 40);   // #0: a base row
+        const RecordedEdit e1 = recordPadEdit(o, current, 1, 50);   // #1: no row, the default 37
+        const RecordedEdit e2 = recordPadEdit(o, current, 93, 60);  // #2: no row, no default
+        const bool made = e0.ok && e1.ok && e2.ok && o.edits.size() == 3;
+        const std::string v0 = made ? writeXml(o.edits[0]) : "", v1 = made ? writeXml(o.edits[1]) : "",
+                          v2 = made ? writeXml(o.edits[2]) : "";
+        note("recorded: " + v0.substr(0, v0.size() ? v0.size() - 1 : 0) + " " +
+             v1.substr(0, v1.size() ? v1.size() - 1 : 0) + " " + v2.substr(0, v2.size() ? v2.size() - 1 : 0));
+        check("key.was is the row's key, else the default 36 + n, else \"none\" (pads 92..95)",
+              v0 == "<set-pad n=\"5\" key=\"40\" key.was=\"36\"/>\n" &&
+                  v1 == "<set-pad n=\"1\" key=\"50\" key.was=\"37\"/>\n" &&
+                  v2 == "<set-pad n=\"93\" key=\"60\" key.was=\"none\"/>\n");
+        check("the first edit records the base's version", o.baseVersion == "3" && e0.stampedBaseVersion);
+        Program direct = lib3;
+        setPadKey(direct, 5, 40);
+        setPadKey(direct, 1, 50);
+        setPadKey(direct, 93, 60);
+        const OverlayResult r = applyOverlay(lib3, o);
+        note("on version 3: " + describe(r));
+        check("applied on version 3: equals the reassignments made directly, nothing drifted; the base untouched",
+              r.program == direct && current == direct && r.drifted().empty() && r.orphaned().empty() &&
+                  r.edits[0].state == OverlayEditState::Applied && r.edits[2].state == OverlayEditState::Applied &&
+                  lib3.padKey(5) == 36);
+        const std::string text = writeOverlay(o);
+        const OverlayParseResult back = parseOverlay(text);
+        check("the overlay round-trips byte-stable", back.ok && back.overlay == o && writeOverlay(back.overlay) == text);
+
+        const OverlayResult d = applyOverlay(lib4, o);
+        note("on version 4: " + describe(d));
+        check("on version 4 (pad 5 moved to 42, pad 1 given 47): #0 and #1 drifted with was / now; #2 applied",
+              d.drifted() == std::vector<size_t>({0, 1}) && d.edits[0].drift.size() == 1 &&
+                  d.edits[0].drift[0] == OverlayDrift{"key", "36", "42"} && d.edits[1].drift.size() == 1 &&
+                  d.edits[1].drift[0] == OverlayDrift{"key", "37", "47"} &&
+                  d.edits[2].state == OverlayEditState::Applied && d.versionMismatch());
+        check("...still applied: the overlay's keys play (pad 5 on 40, pad 1 on 50, pad 93 on 60)",
+              d.program.padKey(5) == 40 && d.program.padKey(1) == 50 && d.program.padKey(93) == 60);
+        Program lib6 = lib3;
+        lib6.pads.push_back(PadRow{93, 61, {}});  // a newer base gives pad 93 a key of its own
+        const OverlayResult d6 = applyOverlay(lib6, o);
+        check("a base that adds a row for a pad the overlay set from \"none\": drifted (was none, now 61); 60 plays",
+              d6.drifted() == std::vector<size_t>({2}) && d6.edits[2].drift.size() == 1 &&
+                  d6.edits[2].drift[0] == OverlayDrift{"key", "none", "61"} && d6.program.padKey(93) == 60);
+        Program bare = v3;  // no table at all: a set-pad is never orphaned
+        const OverlayResult rb0 = applyOverlay(bare, o);
+        check("a set-pad is never orphaned (a base with no <Pads> table at all)",
+              rb0.orphaned().empty() && rb0.program.padKey(5) == 40);
+
+        Overlay ro = o;
+        Program rc = current;
+        const RebasedOverlay rb = rebaseOverlay(ro, rc, lib4);
+        check("rebase onto version 4: #0 and #1 refreshed to key.was=\"42\" / \"47\"; #2 left byte for byte",
+              rb.ok && rb.refreshed == std::vector<size_t>({0, 1}) && ro.baseVersion == "4" &&
+                  writeXml(ro.edits[0]) == "<set-pad n=\"5\" key=\"40\" key.was=\"42\"/>\n" &&
+                  writeXml(ro.edits[1]) == "<set-pad n=\"1\" key=\"50\" key.was=\"47\"/>\n" && ro.edits[2] == o.edits[2]);
+        const OverlayResult post = applyOverlay(lib4, ro);
+        check("after the rebase: no drift, no version report; what plays does not change",
+              post.drifted().empty() && !post.versionMismatch() && post.program == d.program && rc == d.program);
+        check("undo of the rebase: the overlay as before", undoRebase(ro, rc, rb) && ro == o && rc == current);
+
+        const OverlayResult f = flatten(lib4, o);
+        const std::string flat = writeProgram(f.program);
+        check("flatten writes the resulting <Pads> table: 1 -> 50, 5 -> 40, 93 -> 60, and no libraryVersion",
+              flat.find("<Pad n=\"1\" key=\"50\"/>") != std::string::npos &&
+                  flat.find("<Pad n=\"5\" key=\"40\"/>") != std::string::npos &&
+                  flat.find("<Pad n=\"93\" key=\"60\"/>") != std::string::npos && f.program.libraryVersion.empty() &&
+                  parseProgram(flat).ok && parseProgram(flat).program == f.program);
+        Overlay od = o;
+        Program cd = current;
+        const RecordedEdit toDefault = recordPadEdit(od, cd, 5, 41);  // 36 + 5: pad 5's default
+        check("a set-pad to the pad's default key leaves no row in the flattened table",
+              toDefault.ok && flatten(lib3, od).program.pads.size() == 3 &&
+                  writeProgram(flatten(lib3, od).program).find("<Pad n=\"5\"") == std::string::npos);
+
+        Overlay ou = o;
+        Program cu = current;
+        const std::string uBefore = writeOverlay(ou);
+        const RecordedEdit e3 = recordPadEdit(ou, cu, 2, 44);  // pad 2's row is ON its default
+        check("undo of a set-pad over a row on its default key: the overlay bytes and the table, row and order, as before",
+              e3.ok && undoRecordedEdit(ou, cu, e3) && writeOverlay(ou) == uBefore && cu == current &&
+                  cu.pads.size() == current.pads.size());
+        check("undo of all three, last first: the empty overlay, version 3 as it was, baseVersion cleared",
+              undoRecordedEdit(o, current, e2) && undoRecordedEdit(o, current, e1) &&
+                  undoRecordedEdit(o, current, e0) && writeOverlay(o) == textBefore && current == lib3 &&
+                  o.baseVersion.empty());
+        check("undo of an edit that is not the last is refused", !undoRecordedEdit(o, current, e1));
+
+        Overlay ob;
+        Program cb = lib3;
+        check("recording n = 96, n = -1, key = 128 or key = -1 is refused, nothing changes",
+              !recordPadEdit(ob, cb, 96, 40).ok && !recordPadEdit(ob, cb, -1, 40).ok &&
+                  !recordPadEdit(ob, cb, 3, 128).ok && !recordPadEdit(ob, cb, 93, -1).ok && ob.edits.empty() &&
+                  cb == lib3);
+        const OverlayParseResult bad = parseOverlay(
+            R"(<NassauDigitalOverlay version="1"><set-pad n="96" key="40" key.was="none"/>)"
+            R"(<set-pad n="3" key="128" key.was="39"/><set-pad n="3" key="40"/>)"
+            R"(<set-pad n="3" key="40" key.was="x"/><set-pad n="3" key="40" key.was="39" zone="5"/>)"
+            R"(<set-pad key="40" key.was="39"/><set-pad n="3" key="+2" key.was="39"/></NassauDigitalOverlay>)");
+        const OverlayResult br = applyOverlay(lib3, bad.overlay);
+        bool allRefused = bad.ok && br.edits.size() == 7;
+        for (const auto& e : br.edits) allRefused = allRefused && e.state == OverlayEditState::Refused;
+        note("refusals: " + (br.edits.empty() ? std::string() : br.edits[0].error + " | " + br.edits[4].error));
+        check("stored set-pads out of range, without key.was, with a bad key.was, an extra attribute, no n or a "
+              "relative key are refused; the program is the base",
+              allRefused && br.program == lib3);
+    }
+
+    // ------------------------------------------------------------ hide-pad ---
+    group("2026-11-04 (the author, QBX-278) hide-pad: hides one base <Pads> row; undoable; flatten drops it");
+    {
+        // The library: pad 2 on 50, pad 5 on 36, pad 93 on 70 (no default:
+        // it exists only by its row). Version 2 dropped pad 93's row.
+        Program lib1 = v3;
+        lib1.libraryVersion = "1";
+        lib1.pads = {PadRow{2, 50, {}}, PadRow{5, 36, {}}, PadRow{93, 70, {}}};
+        Program lib2 = lib1;
+        lib2.libraryVersion = "2";
+        lib2.pads = {PadRow{2, 50, {}}, PadRow{5, 36, {}}};
+        Overlay o;
+        Program current = lib1;
+        const std::string textBefore = writeOverlay(o);
+        const RecordedEdit h5 = recordHidePad(o, current, lib1, 5);    // #0
+        const RecordedEdit h93 = recordHidePad(o, current, lib1, 93);  // #1
+        const bool made = h5.ok && h93.ok && o.edits.size() == 2;
+        check("recorded as <hide-pad n=\"5\"/> and <hide-pad n=\"93\"/>",
+              made && writeXml(o.edits[0]) == "<hide-pad n=\"5\"/>\n" && writeXml(o.edits[1]) == "<hide-pad n=\"93\"/>\n");
+        const OverlayResult r = applyOverlay(lib1, o);
+        note("on version 1: " + describe(r));
+        check("what plays: pad 5 back on its default 41, pad 93 has no key; pad 2 keeps its row; the base keeps all three",
+              r.program.padKey(5) == 41 && r.program.padKey(93) == -1 && r.program.padKey(2) == 50 &&
+                  r.program.pads.size() == 1 && current == r.program && lib1.pads.size() == 3 &&
+                  r.drifted().empty() && r.orphaned().empty());
+        const std::string text = writeOverlay(o);
+        const OverlayParseResult back = parseOverlay(text);
+        check("the overlay round-trips byte-stable", back.ok && back.overlay == o && writeOverlay(back.overlay) == text);
+        const OverlayResult f = flatten(lib1, o);
+        check("flatten drops the hidden rows: only pad 2's row is written",
+              f.program.pads.size() == 1 && f.program.pads[0].n == 2 &&
+                  writeProgram(f.program).find("<Pad n=\"5\"") == std::string::npos &&
+                  writeProgram(f.program).find("<Pad n=\"93\"") == std::string::npos);
+        const OverlayResult r2 = applyOverlay(lib2, o);
+        note("on version 2: " + describe(r2));
+        check("on version 2 (no row for pad 93): #1 orphaned, missingId 93; #0 applies; nothing else changes",
+              r2.orphaned() == std::vector<size_t>({1}) && r2.edits[1].missingId == 93 &&
+                  r2.edits[0].state == OverlayEditState::Applied && r2.program.padKey(5) == 41 &&
+                  r2.program.padKey(2) == 50);
+        Overlay ro = o;
+        Program rc = applyOverlay(lib2, o).program;
+        const RebasedOverlay rb = rebaseOverlay(ro, rc, lib2);
+        check("rebase onto version 2: the orphan stays an orphan, byte for byte", rb.ok &&
+              rb.orphaned == std::vector<size_t>({1}) && ro.edits == o.edits && applyOverlay(lib2, ro).orphaned() ==
+                                                                                     std::vector<size_t>({1}));
+        // set-pad after the hide: key.was is what plays then, the default.
+        Overlay os = o;
+        Program cs = current;
+        const RecordedEdit sp = recordPadEdit(os, cs, 5, 44);
+        check("a set-pad after the hide records key.was=\"41\" (the default the hide left)",
+              sp.ok && writeXml(os.edits.back()) == "<set-pad n=\"5\" key=\"44\" key.was=\"41\"/>\n" && cs.padKey(5) == 44);
+        Overlay ob = o;
+        Program cb = current;
+        check("refused, changing nothing: a pad with no base row, a row already hidden, n = 96",
+              !recordHidePad(ob, cb, lib1, 1).ok && !recordHidePad(ob, cb, lib1, 5).ok &&
+                  !recordHidePad(ob, cb, lib1, 96).ok && ob == o && cb == current);
+        note("refusals: " + recordHidePad(ob, cb, lib1, 1).error + " | " + recordHidePad(ob, cb, lib1, 5).error);
+        Overlay od = Overlay{};
+        Program cdef = lib1;
+        recordPadEdit(od, cdef, 2, 38);  // set-pad to the default removes the row from what plays
+        const RecordedEdit hd = recordHidePad(od, cdef, lib1, 2);
+        check("refused, saying why: a base row the overlay already put on its default key, or already hidden",
+              !hd.ok && od.edits.size() == 1 && hd.error.find("does not play now") != std::string::npos &&
+                  recordHidePad(ob, cb, lib1, 5).error.find("already hidden") != std::string::npos);
+        Overlay on = Overlay{};
+        Program cn = lib1;
+        recordPadEdit(on, cn, 1, 60);  // a row the OVERLAY made, the base has none
+        const RecordedEdit hn = recordHidePad(on, cn, lib1, 1);
+        check("refused: a row only the overlay made (the base has none for the pad); a hide is of a base row",
+              !hn.ok && on.edits.size() == 1 && cn.padKey(1) == 60 &&
+                  hn.error.find("no row in the base") != std::string::npos);
+        check("undo of both, last first: the rows back where they were (order kept), the empty overlay",
+              undoRecordedEdit(o, current, h93) && current.pads.size() == 2 && undoRecordedEdit(o, current, h5) &&
+                  current == lib1 && current.pads[1].n == 5 && writeOverlay(o) == textBefore && o.baseVersion.empty());
+        const OverlayParseResult bad = parseOverlay(
+            R"(<NassauDigitalOverlay version="1"><hide-pad n="96"/><hide-pad/><hide-pad n="5" key="1"/>)"
+            R"(<hide-pad n="+5"/><hide-pad n="x"/></NassauDigitalOverlay>)");
+        const OverlayResult br = applyOverlay(lib1, bad.overlay);
+        bool allRefused = bad.ok && br.edits.size() == 5;
+        for (const auto& e : br.edits) allRefused = allRefused && e.state == OverlayEditState::Refused;
+        check("stored hide-pads out of range, without n, with another attribute, relative or not a number are "
+              "refused; the program is the base",
+              allRefused && br.program == lib1);
     }
 
     // --------------------------------------------- the format, all verbs ---
