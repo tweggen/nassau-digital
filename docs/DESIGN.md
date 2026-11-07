@@ -481,6 +481,59 @@ not change, because every sampler meets them:
   default as its `key.was`; a hide after a `set-pad` of a base row removes
   the row the `set-pad` changed (the simplest reversible reading).
 
+**Settled on 2026-11-07 (the author, QBX-282)**: how a host's edits on a
+library instance become overlay edits. qbx built them with no core change.
+The rules belong to the host, but every host of the format meets them, so
+they are recorded here.
+
+* **Every program edit on a library instance is an overlay edit.**
+  - A zone, layer or program parameter becomes `set-zone`, `set-layer` or
+    `set-program`.
+  - Adding a zone or a layer becomes `add-zone` or `add-layer`, with an id
+    from the reserved range.
+  - Removing a zone or a layer becomes `hide-zone` or `hide-layer`. This
+    holds for a zone or layer the overlay added as well as for a base one:
+    its id is hidden, and its `add-*` verbs stay where they are.
+* **An asset link** is the host's own `src` text in a `set-layer`: in qbx,
+  `src="link:N"`, with `src.was` the base's src. The host keeps the link
+  table. A link stays held and saved while **any** overlay verb names it,
+  an orphaned one included, so an orphan that applies again on a later base
+  still plays its asset.
+* **A recording** lands as §7 says, written as overlay ops:
+  - an overlay `add-zone` where §7 makes a zone;
+  - an overlay `set-layer` replacing layer 1 where the pad's zone exists,
+    a base zone included.
+
+  Its `src` is the same as a recording into a program of its own carries.
+* **One gesture is one verb per target.** A knob drag records the final
+  value, with the `.was` from before the drag, so the overlay is the same
+  during the drag, after its redo and after a reload. Separate edits still
+  append (no coalescing).
+* **An explicit zone id** is accepted on a library only when it is the
+  overlay's next id; the host reads that id from the overlay. (An explicit
+  id is how a host adds a zone under a known id, so that the same step can
+  name the zone's layer.)
+* **Overlay ids are never reused.** Undoing an add keeps the overlay's
+  `nextId` advanced, as `undoRecordedEdit()` does, and the redo puts back
+  the same ids. After an undo the overlay is the one from before the edit
+  except for `nextId`.
+* **One host verb is one undo step**, however many overlay verbs it writes:
+  a zone list, ALL, a zone with its layers, a recording.
+* **A newer base that already has an id an overlay add took** is accepted.
+  That add is refused and reported. Later verbs naming the id apply to the
+  base's zone, and are reported drifted where their `.was` differs (as
+  built).
+* **Flatten is a host verb** (`flatten-sampler-library` in qbx) built on the
+  core's `flatten()`:
+  - the instance becomes a program of its own that plays what the library
+    played;
+  - the overlay's ids are kept;
+  - orphaned, refused and unknown edits are dropped, as flatten drops them
+    (C8), and so is an asset link that only an orphaned edit named, since
+    nothing in the flattened program names it;
+  - it is undoable back to the library instance, base and overlay byte for
+    byte.
+
 This is what Kontakt, Logic's Sampler and SFZ do implicitly (edits live in the
 instance; the library is untouched; "save as" writes a new file that refers to
 the old samples), made explicit and minimal.
